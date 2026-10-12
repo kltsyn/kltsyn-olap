@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ClickHouse：压缩与跳数 / 布隆 — 同一条查询</title>
+  <style>
+    :root {
+      --bg: #f6f5f1;
+      --ink: #1c1917;
+      --muted: #57534e;
+      --line: #d6d3d1;
+      --skip: #166534;
+      --skip-bg: #dcfce7;
+      --read: #9a3412;
+      --read-bg: #ffedd5;
+      --col: #1d4ed8;
+      --col-bg: #dbeafe;
+      --fat: #a8a29e;
+      --paper: #fff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 15px/1.5 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+    }
+    main { max-width: 1080px; margin: 0 auto; padding: 28px 20px 64px; }
+    h1 { font-size: 22px; font-weight: 650; margin: 0 0 8px; }
+    h2 { font-size: 17px; font-weight: 650; margin: 32px 0 10px; }
+    p, figcaption { color: var(--muted); margin: 0 0 12px; }
+    code {
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 13px;
+      background: #e7e5e4;
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+    pre {
+      background: #1c1917;
+      color: #fafaf9;
+      padding: 12px 14px;
+      border-radius: 8px;
+      overflow: auto;
+      font: 13px/1.45 ui-monospace, Consolas, monospace;
+    }
+    .legend { display: flex; flex-wrap: wrap; gap: 10px 16px; margin: 12px 0 8px; font-size: 13px; }
+    .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+    figure {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 16px;
+      margin: 0 0 8px;
+    }
+    svg { display: block; width: 100%; height: auto; }
+    .note { font-size: 13px; color: var(--muted); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--paper);
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #e7e5e4; font-weight: 600; }
+    .flow {
+      display: grid;
+      grid-template-columns: 1fr 28px 1fr 28px 1fr;
+      gap: 8px;
+      align-items: stretch;
+      margin: 12px 0 20px;
+    }
+    .flow .box {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .flow .box strong { display: block; margin-bottom: 6px; }
+    .arrow { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 20px; }
+    @media (max-width: 800px) {
+      .flow { grid-template-columns: 1fr; }
+      .arrow { transform: rotate(90deg); height: 20px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>同一条查询里，压缩和跳数各自干了什么</h1>
+    <p>口诀里的「跳数 / 布隆」不要读成一件事：<strong>跳数索引是总称</strong>；minmax 和布隆是其中两种 TYPE。稀疏主键也在跳 granule，但是目录，不是跳数索引。</p>
+    <p>表 <code>ads_click</code>：1 天 1 亿行，80 列，主键 <code>(date, slot_id)</code>，granule 默认约 8192 行（启用自适应粒度时还受 <code>index_granularity_bytes</code> 影响）。查询只要昨天、广告位 1001、计划 99 的费用合计。</p>
+    <pre>SELECT sum(fee)
+FROM ads_click
+WHERE date = '2026-10-11'
+  AND slot_id = 1001
+  AND campaign_id = 99</pre>
+
+    <div class="legend">
+      <span><i class="swatch" style="background:#a8a29e"></i>不读</span>
+      <span><i class="swatch" style="background:#dcfce7"></i>跳过</span>
+      <span><i class="swatch" style="background:#ffedd5"></i>要读盘</span>
+      <span><i class="swatch" style="background:#dbeafe"></i>压缩后更薄</span>
+    </div>
+
+    <h2>图 1 · 列存 + 压缩：少读哪些字节</h2>
+    <figure>
+      <svg viewBox="0 0 1000 340" role="img" aria-label="行式整行搬运对比列存只读四列且压缩变薄">
+        <text x="20" y="24" font-size="14" font-weight="600">行式：命中行也要搬整行 80 列</text>
+        <g font-size="11" font-family="Segoe UI, sans-serif">
+          <rect x="20" y="40" width="960" height="36" fill="#e7e5e4" stroke="#a8a29e"/>
+          <text x="28" y="62">date slot campaign fee os ip ua json …（其余 72 列也在这一行里）</text>
+          <text x="20" y="96" fill="#57534e">磁盘吐出：整行宽度 × 命中行数。只要 fee，UA/JSON 也跟着来。</text>
+        </g>
+
+        <text x="20" y="140" font-size="14" font-weight="600">列存：只打开 4 个列文件</text>
+        <!-- unread columns -->
+        <rect x="20" y="156" width="70" height="88" fill="#e7e5e4"/>
+        <text x="32" y="206" font-size="11">os</text>
+        <rect x="96" y="156" width="70" height="88" fill="#e7e5e4"/>
+        <text x="112" y="206" font-size="11">ip</text>
+        <rect x="172" y="156" width="70" height="88" fill="#e7e5e4"/>
+        <text x="184" y="206" font-size="11">ua</text>
+        <text x="250" y="206" font-size="18" fill="#a8a29e">… 76 列不打开</text>
+
+        <!-- four columns needed, uncompressed vs compressed -->
+        <text x="520" y="152" font-size="12" fill="#57534e">要读的 4 列：明文块 → 盘上压缩块</text>
+        <g font-size="11">
+          <rect x="520" y="164" width="36" height="100" fill="#fed7aa" stroke="#9a3412"/>
+          <rect x="562" y="204" width="36" height="60" fill="#dbeafe" stroke="#1d4ed8"/>
+          <text x="524" y="280">date</text>
+          <text x="566" y="280" fill="#1d4ed8">压</text>
+
+          <rect x="620" y="164" width="36" height="100" fill="#fed7aa" stroke="#9a3412"/>
+          <rect x="662" y="214" width="36" height="50" fill="#dbeafe" stroke="#1d4ed8"/>
+          <text x="622" y="280">slot</text>
+          <text x="666" y="280" fill="#1d4ed8">压</text>
+
+          <rect x="720" y="164" width="36" height="100" fill="#fed7aa" stroke="#9a3412"/>
+          <rect x="762" y="200" width="36" height="64" fill="#dbeafe" stroke="#1d4ed8"/>
+          <text x="708" y="280">campaign</text>
+          <text x="766" y="280" fill="#1d4ed8">压</text>
+
+          <rect x="830" y="164" width="36" height="100" fill="#fed7aa" stroke="#9a3412"/>
+          <rect x="872" y="224" width="36" height="40" fill="#dbeafe" stroke="#1d4ed8"/>
+          <text x="836" y="280">fee</text>
+          <text x="876" y="280" fill="#1d4ed8">压</text>
+        </g>
+        <text x="20" y="320" font-size="12" fill="#57534e">同列才好压：os 几乎只有 android/ios，fee 都是数。盘上读的是蓝块高度，不是橙块高度。</text>
+      </svg>
+      <figcaption>列存决定打开哪几个文件；压缩决定每个文件有多薄。行式「搬整行」是教学概括——带覆盖索引的行存可能不必回表读完整行。</figcaption>
+    </figure>
+
+    <h2>图 2 · 主键裁切 + campaign minmax：哪些 granule 不读</h2>
+    <p>按默认约 8192 行/叠，1 亿行约 1.2 万个 granule（自适应时叠大小还受 <code>index_granularity_bytes</code> 约束）。主键 <code>(date, slot_id)</code> 已排序，<code>slot_id=1001</code> 挤在连续约 20 个 granule（约 16 万行）。本页 <code>GRANULARITY 1</code>，再看这 20 个上贴的 <code>campaign_id</code> min/max。</p>
+    <figure>
+      <svg viewBox="0 0 1000 390" role="img" aria-label="主键从一万多个 granule 收到二十个，minmax 再只读两三个">
+        <text x="20" y="22" font-size="13" font-weight="600">全部 granule（示意，不是 12207 个格子）</text>
+        <g>
+          <rect x="20" y="36" width="960" height="28" fill="#e7e5e4"/>
+          <rect x="420" y="36" width="160" height="28" fill="#ffedd5" stroke="#9a3412"/>
+          <text x="20" y="80" font-size="12" fill="#57534e">灰：主键对不上，不读。橙：date=昨天 且 slot=1001 的连续一段，约 20 个 granule。</text>
+        </g>
+
+        <text x="20" y="118" font-size="13" font-weight="600">这 20 个 granule 的 campaign_id 便利贴（minmax）</text>
+        <!-- 5 example granules -->
+        <g font-size="12" font-family="Segoe UI, sans-serif">
+          <rect x="20" y="136" width="180" height="130" fill="#dcfce7" stroke="#166534"/>
+          <text x="32" y="160" font-weight="600">G1 跳过</text>
+          <text x="32" y="182">行 0–8191</text>
+          <text x="32" y="204">min=1  max=15</text>
+          <text x="32" y="230">99 不可能在</text>
+          <text x="32" y="250">不读盘</text>
+
+          <rect x="214" y="136" width="180" height="130" fill="#dcfce7" stroke="#166534"/>
+          <text x="226" y="160" font-weight="600">G2 跳过</text>
+          <text x="226" y="182">行 8192–16383</text>
+          <text x="226" y="204">min=20  max=80</text>
+          <text x="226" y="230">99 不可能在</text>
+          <text x="226" y="250">不读盘</text>
+
+          <rect x="408" y="136" width="180" height="130" fill="#ffedd5" stroke="#9a3412"/>
+          <text x="420" y="160" font-weight="600">G3 要读</text>
+          <text x="420" y="182">行 16384–24575</text>
+          <text x="420" y="204">min=90  max=110</text>
+          <text x="420" y="230">99 可能在</text>
+          <text x="420" y="250">解压后再精确过滤</text>
+
+          <rect x="602" y="136" width="180" height="130" fill="#ffedd5" stroke="#9a3412"/>
+          <text x="614" y="160" font-weight="600">G4 要读</text>
+          <text x="614" y="182">行 24576–32767</text>
+          <text x="614" y="204">min=99  max=99</text>
+          <text x="614" y="230">这段全是 99</text>
+          <text x="614" y="250">读 campaign + fee</text>
+
+          <rect x="796" y="136" width="180" height="130" fill="#dcfce7" stroke="#166534"/>
+          <text x="808" y="160" font-weight="600">G5 跳过</text>
+          <text x="808" y="182">行 32768–40959</text>
+          <text x="808" y="204">min=200  max=800</text>
+          <text x="808" y="230">99 不可能在</text>
+          <text x="808" y="250">不读盘</text>
+        </g>
+        <text x="20" y="300" font-size="13">漏斗：1 亿行 → 主键约 16 万行（20 granule）→ minmax 约 2 万行（2～3 granule）→ 解压后精确 WHERE → sum(fee)</text>
+        <rect x="20" y="316" width="960" height="18" fill="#e7e5e4"/>
+        <rect x="20" y="316" width="160" height="18" fill="#fed7aa"/>
+        <rect x="20" y="316" width="28" height="18" fill="#9a3412"/>
+        <text x="20" y="356" font-size="12" fill="#57534e">条越来越短：全表 → 主键命中 → 真正读盘。若某 granule 里 campaign 从 1 到 10000 都有，minmax 失效，这一叠必须扫。</text>
+      </svg>
+      <figcaption>绿色格子看一眼便利贴就扔；橙色才打开列文件里对应的压缩块。</figcaption>
+    </figure>
+
+    <h2>图 3 · 布隆：user_id=555「一定不在」才跳</h2>
+    <p>若过滤改成高基数列 <code>user_id = 555</code>，minmax 几乎总是「可能在」。本页 <code>GRANULARITY 1</code> 时每个 granule 另有一张很小的布隆图；N&gt;1 则一张图覆盖多个 marks。</p>
+    <figure>
+      <svg viewBox="0 0 1000 260" role="img" aria-label="布隆过滤器对每个 granule 判定一定不在或可能在">
+        <g font-size="12">
+          <rect x="20" y="20" width="300" height="160" fill="#dcfce7" stroke="#166534"/>
+          <text x="36" y="48" font-size="14" font-weight="600">G3 布隆：一定不在</text>
+          <text x="36" y="76">bitmap 里三个哈希位都对不上 555</text>
+          <text x="36" y="104">结论：这一叠没有 555</text>
+          <text x="36" y="132">动作：不读 user_id.bin / fee.bin</text>
+          <text x="36" y="160">不会漏掉真进行（证伪）</text>
+
+          <rect x="350" y="20" width="300" height="160" fill="#ffedd5" stroke="#9a3412"/>
+          <text x="366" y="48" font-size="14" font-weight="600">G7 布隆：可能在</text>
+          <text x="366" y="76">哈希位碰巧全亮（或真有 555）</text>
+          <text x="366" y="104">结论：不能扔掉</text>
+          <text x="366" y="132">动作：读盘，逐值比较</text>
+          <text x="366" y="160">允许误报，多扫一点</text>
+
+          <rect x="680" y="20" width="300" height="160" fill="#fff" stroke="#d6d3d1"/>
+          <text x="696" y="48" font-size="14" font-weight="600">布隆不做什么</text>
+          <text x="696" y="76">不告诉你 555 在第几行</text>
+          <text x="696" y="104">不能当主键用</text>
+          <text x="696" y="132">只负责快速扔掉「一定没有」的叠</text>
+        </g>
+        <text x="20" y="220" font-size="13" fill="#57534e">和压缩的关系：跳过的块连压缩文件都不读；要读的那几块，仍然按图 1 以扁的蓝块读入，再解压后按列块精确过滤。</text>
+      </svg>
+      <figcaption>minmax 适合值扎堆的列；布隆适合几乎人人不同的 ID。</figcaption>
+    </figure>
+
+    <h2>生效原理：跳数索引是总称，minmax/布隆是其中两种 TYPE</h2>
+    <p><strong>跳数索引 ≠ minmax/布隆。</strong> <code>INDEX … TYPE …</code> 这一类东西叫 data skipping index（跳数索引）。minmax、bloom_filter、set、<code>tokenbf_v1</code>、<code>ngrambf_v1</code> 都是它的 TYPE（不同 ClickHouse 版本支持范围不同）。不管哪种 TYPE，干的都是同一件事：对每一块先做一次廉价判断，能证明「这块不可能命中 WHERE」就整块扔掉，连 <code>.bin</code> 都不读。</p>
+    <p>稀疏主键也在扔 granule，但它是 <code>ORDER BY</code> 自带的章节目录，<strong>不是</strong>跳数索引。查询不带主键时，目录歇了，跳数索引的便利贴照样问。</p>
+    <p>差别只在「用什么证明」：minmax 用两个数做范围比较；布隆用几比特做成员证伪。主键裁剪的单位是 granule。跳数索引的过滤单位由 <code>INDEX … GRANULARITY N</code> 决定：一张贴覆盖 N 个 marks；<strong>N=1 时才近似对应一个 granule</strong>，N&gt;1 时一次扔掉的是更大的一块。本页示例 N=1。</p>
+
+    <figure>
+      <svg viewBox="0 0 1000 300" role="img" aria-label="minmax 与布隆都是对同一排 granule 块做跳过或读盘">
+        <text x="20" y="24" font-size="14" font-weight="600">本页示例 GRANULARITY 1：一贴约一叠 granule</text>
+        <g font-size="12">
+          <rect x="20" y="40" width="176" height="56" fill="#fff" stroke="#44403c"/>
+          <text x="78" y="74">G1 ~8192行</text>
+          <rect x="208" y="40" width="176" height="56" fill="#fff" stroke="#44403c"/>
+          <text x="266" y="74">G2 ~8192行</text>
+          <rect x="396" y="40" width="176" height="56" fill="#fff" stroke="#44403c"/>
+          <text x="454" y="74">G3 ~8192行</text>
+          <rect x="584" y="40" width="176" height="56" fill="#fff" stroke="#44403c"/>
+          <text x="642" y="74">G4 ~8192行</text>
+          <rect x="772" y="40" width="176" height="56" fill="#fff" stroke="#44403c"/>
+          <text x="830" y="74">G5 ~8192行</text>
+        </g>
+        <text x="20" y="124" font-size="13">minmax 问：99 会落在 [min,max] 里吗？不在 → 滤掉这一块</text>
+        <g font-size="12">
+          <rect x="20" y="136" width="176" height="40" fill="#dcfce7" stroke="#166534"/>
+          <text x="72" y="162">滤掉 G1</text>
+          <rect x="208" y="136" width="176" height="40" fill="#dcfce7" stroke="#166534"/>
+          <text x="260" y="162">滤掉 G2</text>
+          <rect x="396" y="136" width="176" height="40" fill="#ffedd5" stroke="#9a3412"/>
+          <text x="448" y="162">留下 G3</text>
+          <rect x="584" y="136" width="176" height="40" fill="#ffedd5" stroke="#9a3412"/>
+          <text x="636" y="162">留下 G4</text>
+          <rect x="772" y="136" width="176" height="40" fill="#dcfce7" stroke="#166534"/>
+          <text x="824" y="162">滤掉 G5</text>
+        </g>
+        <text x="20" y="204" font-size="13">布隆问：555 一定不在这叠吗？一定不在 → 同样滤掉这一块</text>
+        <g font-size="12">
+          <rect x="20" y="216" width="176" height="40" fill="#dcfce7" stroke="#166534"/>
+          <text x="72" y="242">滤掉 G1</text>
+          <rect x="208" y="216" width="176" height="40" fill="#ffedd5" stroke="#9a3412"/>
+          <text x="260" y="242">留下 G2</text>
+          <rect x="396" y="216" width="176" height="40" fill="#dcfce7" stroke="#166534"/>
+          <text x="448" y="242">滤掉 G3</text>
+          <rect x="584" y="216" width="176" height="40" fill="#ffedd5" stroke="#9a3412"/>
+          <text x="636" y="242">留下 G4</text>
+          <rect x="772" y="216" width="176" height="40" fill="#dcfce7" stroke="#166534"/>
+          <text x="824" y="242">滤掉 G5</text>
+        </g>
+        <text x="20" y="282" font-size="12" fill="#57534e">绿 = 整块不读压缩列文件。橙 = 这块还要解压，再在块内按行精确过滤。N=1 时一块≈一叠；两种索引都不会在这一步定位到某一行。</text>
+      </svg>
+      <figcaption>本页示例 GRANULARITY 1，过滤粒度约等于一叠。N&gt;1 时一张贴覆盖多个 marks。minmax 和 bloom 是两套不同的「这块能不能扔」测试，不是跳数索引的全部。</figcaption>
+    </figure>
+
+    <p>minmax / 布隆都不是 SELECT 时扫全列现算的。建表写下 <code>INDEX</code>，<strong>INSERT 写 part（以及 merge 出新 part）时</strong>按块统计，结果放进很小的旁路文件 <code>skp_idx_*.idx</code>。查询会按需读取/利用这份跳数索引和稀疏主键的 <code>primary.idx</code>（可能走缓存，新版本也可能流式读，不保证一次性完整载入），用来决定打不打开哪几块的列 <code>.bin</code>。用到的是这两份摘要，不是 80 列数据，也不是整张表。</p>
+
+    <div class="flow">
+      <div class="box">
+        <strong>1. 设置</strong>
+        建表或 <code>ALTER ADD INDEX</code>。<code>ORDER BY</code> 列不用再建。已有数据要 <code>MATERIALIZE INDEX</code>。
+      </div>
+      <div class="arrow">→</div>
+      <div class="box">
+        <strong>2. 计算（写路径）</strong>
+        每个跳数索引块扫那一列（本页 N=1，约一个 granule）：minmax 记下两个数；布隆把值哈希进 bitmap。写 <code>skp_idx_*.idx</code>。
+      </div>
+      <div class="arrow">→</div>
+      <div class="box">
+        <strong>3. 使用（读路径）</strong>
+        WHERE 能对上索引时，先比较便利贴。跳过的叠连压缩块都不读。
+      </div>
+    </div>
+
+    <pre>CREATE TABLE ads_click
+(
+    date Date,
+    slot_id UInt32,
+    campaign_id UInt32,
+    user_id UInt64,
+    fee Float64,
+    INDEX idx_campaign campaign_id TYPE minmax GRANULARITY 1,
+    INDEX idx_user     user_id     TYPE bloom_filter(0.01) GRANULARITY 1
+)
+ENGINE = MergeTree
+PARTITION BY date
+ORDER BY (date, slot_id)
+SETTINGS index_granularity = 8192;  -- 默认约 8192 行/叠；自适应还看 index_granularity_bytes
+
+-- 已有表：
+-- ALTER TABLE ads_click ADD INDEX idx_user user_id TYPE bloom_filter(0.01) GRANULARITY 1;
+-- ALTER TABLE ads_click MATERIALIZE INDEX idx_user;</pre>
+
+    <table>
+      <thead>
+        <tr>
+          <th>参数</th>
+          <th>含义</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>GRANULARITY 1</code></td>
+          <td>一张便利贴覆盖 1 个 mark，约等于一个数据 granule。N&gt;1 时一张贴覆盖多个 marks，过滤单位变大</td>
+        </tr>
+        <tr>
+          <td><code>index_granularity = 8192</code></td>
+          <td>数据 granule 默认约 8192 行；启用自适应粒度时还受 <code>index_granularity_bytes</code> 约束</td>
+        </tr>
+        <tr>
+          <td><code>bloom_filter(0.01)</code></td>
+          <td>期望误报率约 1%。越小图越大。说「不在」可跳；说「可能在」仍要读盘</td>
+        </tr>
+        <tr>
+          <td><code>ORDER BY (date, slot_id)</code></td>
+          <td>稀疏主键自带跳数，这两列不必再 INDEX</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>图 4 · minmax 何时算、查询怎么用</h2>
+    <p>写入 <code>campaign_id</code> 时，按跳数索引块统计（本页 <code>GRANULARITY 1</code>，默认约每 8192 行一叠），只留下 min 和 max。查询 <code>campaign_id = 99</code> 只拿这两个数做范围判断。</p>
+    <figure>
+      <svg viewBox="0 0 1000 420" role="img" aria-label="minmax 在 INSERT 时按 granule 计算，查询时用 min max 决定跳过或读盘">
+        <text x="20" y="24" font-size="14" font-weight="600">写 part：对 campaign_id 这一列按叠统计</text>
+        <g font-size="12">
+          <rect x="20" y="40" width="960" height="44" fill="#e7e5e4"/>
+          <text x="32" y="68">INSERT 进来的 campaign_id：1,3,8,…,15 | 20…80 | 90…110 | 99,99,… | 200…800</text>
+          <text x="20" y="108" fill="#57534e">↓ 本页 GRANULARITY 1：按默认约 8192 行切开，每叠算两个数，写入 skp_idx_idx_campaign.idx</text>
+        </g>
+        <g font-size="12">
+          <rect x="20" y="124" width="180" height="72" fill="#dcfce7" stroke="#166534"/>
+          <text x="32" y="148">G1 min=1</text>
+          <text x="32" y="170">max=15</text>
+          <rect x="214" y="124" width="180" height="72" fill="#dcfce7" stroke="#166534"/>
+          <text x="226" y="148">G2 min=20</text>
+          <text x="226" y="170">max=80</text>
+          <rect x="408" y="124" width="180" height="72" fill="#ffedd5" stroke="#9a3412"/>
+          <text x="420" y="148">G3 min=90</text>
+          <text x="420" y="170">max=110</text>
+          <rect x="602" y="124" width="180" height="72" fill="#ffedd5" stroke="#9a3412"/>
+          <text x="614" y="148">G4 min=99</text>
+          <text x="614" y="170">max=99</text>
+          <rect x="796" y="124" width="180" height="72" fill="#dcfce7" stroke="#166534"/>
+          <text x="808" y="148">G5 min=200</text>
+          <text x="808" y="170">max=800</text>
+        </g>
+        <text x="20" y="228" font-size="14" font-weight="600">SELECT 时：WHERE campaign_id = 99</text>
+        <text x="20" y="252" font-size="12" fill="#57534e">先读上面 5 对整数。规则：max &lt; 99 或 min &gt; 99 → 跳过整叠；min ≤ 99 ≤ max → 打开压缩块再精确过滤。</text>
+        <g font-size="13">
+          <rect x="20" y="268" width="180" height="56" fill="#dcfce7" stroke="#166534"/>
+          <text x="40" y="302">G1 跳过</text>
+          <rect x="214" y="268" width="180" height="56" fill="#dcfce7" stroke="#166534"/>
+          <text x="234" y="302">G2 跳过</text>
+          <rect x="408" y="268" width="180" height="56" fill="#ffedd5" stroke="#9a3412"/>
+          <text x="428" y="302">G3 读盘</text>
+          <rect x="602" y="268" width="180" height="56" fill="#ffedd5" stroke="#9a3412"/>
+          <text x="622" y="302">G4 读盘</text>
+          <rect x="796" y="268" width="180" height="56" fill="#dcfce7" stroke="#166534"/>
+          <text x="816" y="302">G5 跳过</text>
+        </g>
+        <text x="20" y="356" font-size="12" fill="#57534e">适用：=、IN、&gt;、BETWEEN。campaign_id % 10 = 3 这种用不上 minmax。</text>
+        <text x="20" y="380" font-size="12" fill="#57534e">若一叠里值从 1 到 10000 都有，算出来仍是 min=1 max=10000，设置了也跳不动。</text>
+        <text x="20" y="404" font-size="12" fill="#57534e">后台 merge 把小 part 合成大 part 时，会按新的叠重算 min/max。</text>
+      </svg>
+      <figcaption>计算发生在写盘；查询只比较预先存好的两个数。</figcaption>
+    </figure>
+
+    <h2>图 5 · 布隆何时算、查询怎么用</h2>
+    <p>同样在写 part 时算。每个跳数索引块不是存 min/max，而是把这块里的 <code>user_id</code>（本页 GRANULARITY 1，默认约 8192 个）哈希进一张小 bitmap。</p>
+    <figure>
+      <svg viewBox="0 0 1000 390" role="img" aria-label="布隆在 INSERT 时点亮哈希位，查询时按位判断一定不在或可能在">
+        <text x="20" y="24" font-size="14" font-weight="600">写 part：user_id 叠进布隆图</text>
+        <g font-size="12">
+          <rect x="20" y="40" width="460" height="150" fill="#fff" stroke="#d6d3d1"/>
+          <text x="36" y="64" font-weight="600">G3 的约 8192 个 user_id</text>
+          <text x="36" y="88">对每个 ID 做 k 次哈希，点亮 bitmap 对应位</text>
+          <text x="36" y="120">图：■ □ ■ ■ □ ■ □ □ …</text>
+          <text x="36" y="148">555 的三位里有一位是 □ → 写入「555 不在这叠」的能力</text>
+          <text x="36" y="172" fill="#57534e">文件：skp_idx_idx_user.idx</text>
+
+          <rect x="520" y="40" width="460" height="150" fill="#fff" stroke="#d6d3d1"/>
+          <text x="536" y="64" font-weight="600">G7 的约 8192 个 user_id</text>
+          <text x="536" y="88">同样点亮一批位（可能含 555，或只是撞哈希）</text>
+          <text x="536" y="120">图：■ ■ ■ ■ □ ■ ■ □ …</text>
+          <text x="536" y="148">555 需要的位碰巧全是 ■</text>
+          <text x="536" y="172" fill="#57534e">查询时只能说「可能在」</text>
+        </g>
+        <text x="20" y="220" font-size="14" font-weight="600">SELECT user_id = 555：先问图，再决定读不读 .bin</text>
+        <g font-size="13">
+          <rect x="20" y="236" width="460" height="88" fill="#dcfce7" stroke="#166534"/>
+          <text x="36" y="264" font-weight="600">G3：需要的位有 □ → 一定不在</text>
+          <text x="36" y="288">不打开 user_id.bin / fee.bin 这一段</text>
+          <text x="36" y="312">按设计不应漏掉真有 555 的叠</text>
+          <rect x="520" y="236" width="460" height="88" fill="#ffedd5" stroke="#9a3412"/>
+          <text x="536" y="264" font-weight="600">G7：需要的位全 ■ → 可能在</text>
+          <text x="536" y="288">读压缩块，逐值比较（可能误报）</text>
+          <text x="536" y="312">0.01 表示大约 1% 的冤枉读盘</text>
+        </g>
+        <text x="20" y="352" font-size="12" fill="#57534e">布隆吃 =、IN；user_id &gt; 1000 这种范围条件用不上。字符串整值哈希用 bloom_filter；LIKE '%x%' 才用 tokenbf_v1 / ngrambf_v1。</text>
+        <text x="20" y="376" font-size="12" fill="#57534e">和压缩的衔接：跳过则连扁的蓝块都不读；要读的叠仍按图 1 解压后再精确过滤。</text>
+      </svg>
+      <figcaption>计算发生在写盘；查询只探测几个比特。布隆负责证伪，不负责定位行号。</figcaption>
+    </figure>
+
+    <h2>怎么选</h2>
+    <p>先分家：稀疏主键不是 INDEX。跳数索引是总称。下面选的是跳数索引的 TYPE。本页示例 GRANULARITY 1，过滤单位约等于一叠 granule；N&gt;1 时一张贴覆盖多个 marks。选哪种，只看哪套测试更容易把整块证伪。收益高度依赖数据相关性和查询谓词。</p>
+    <table>
+      <thead>
+        <tr>
+          <th>列的样子</th>
+          <th>用什么</th>
+          <th>为什么</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>已在 ORDER BY 里：date、slot_id</td>
+          <td>不用跳数索引</td>
+          <td>稀疏主键（目录）已经在跳，不是 INDEX</td>
+        </tr>
+        <tr>
+          <td>一段行里比较扎堆：campaign_id、状态码</td>
+          <td>跳数索引 TYPE <code>minmax</code></td>
+          <td>两个数就能证伪整叠</td>
+        </tr>
+        <tr>
+          <td>高基、几乎随机：user_id、device_id</td>
+          <td>跳数索引 TYPE <code>bloom_filter(0.01)</code></td>
+          <td>minmax 会变成 1～很大，跳不动</td>
+        </tr>
+        <tr>
+          <td>低基枚举：状态、类型码</td>
+          <td>跳数索引 TYPE <code>set</code></td>
+          <td>这叠出现过的值做集合，比 minmax 更贴</td>
+        </tr>
+        <tr>
+          <td>字符串子串：<code>LIKE '%x%'</code></td>
+          <td>跳数索引 TYPE <code>tokenbf_v1</code> / <code>ngrambf_v1</code>（版本支持范围不同）</td>
+          <td>整值布隆吃不了子串</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p class="note">数字是教学用量级（1 亿行、granule 默认约 8192、本页 INDEX GRANULARITY 1、20 个主键命中、2～3 个 campaign 命中），用来对齐机制，不是一次真实 benchmark。</p>
+  </main>
+</body>
+</html>

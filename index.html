@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ClickHouse OLAP 怎么记</title>
+  <style>
+    :root {
+      --bg: #f6f5f1;
+      --ink: #1c1917;
+      --muted: #57534e;
+      --line: #d6d3d1;
+      --paper: #fff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 15px/1.5 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+    }
+    main { max-width: 640px; margin: 0 auto; padding: 48px 20px 72px; }
+    h1 { font-size: 24px; font-weight: 650; margin: 0 0 8px; }
+    p { color: var(--muted); margin: 0 0 20px; }
+    a.card {
+      display: block;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 16px 18px;
+      margin: 0 0 12px;
+      color: var(--ink);
+      text-decoration: none;
+    }
+    a.card:hover { border-color: #a8a29e; }
+    a.card strong { display: block; font-size: 16px; margin-bottom: 4px; }
+    a.card span { color: var(--muted); font-size: 14px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>ClickHouse OLAP 怎么记</h1>
+    <p>两页教学材料。先记总纲，再看压缩和跳数索引怎么少读盘。</p>
+    <a class="card" href="clickhouse-perf-memory.html">
+      <strong>高性能怎么记</strong>
+      <span>少读、顺读、批算、别挡；稀疏主键、跳数索引、part 文件结构</span>
+    </a>
+    <a class="card" href="clickhouse-compress-skip.html">
+      <strong>压缩与跳数 / 布隆</strong>
+      <span>同一条查询里，压缩和跳数索引各自干了什么</span>
+    </a>
+  </main>
+</body>
+</html>
