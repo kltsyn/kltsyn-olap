@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ClickHouse 高性能怎么记</title>
+  <title>ClickHouse 整体怎么记</title>
   <style>
     :root {
       --bg: #f6f5f1;
@@ -21,37 +21,47 @@
       --free-bg: #f3e8ff;
       --warn: #9f1239;
       --warn-bg: #ffe4e6;
-      --fat: #a8a29e;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      font: 15px/1.5 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      font: 16px/1.45 "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+      font-feature-settings: "kern" 1, "liga" 1;
       color: var(--ink);
       background: var(--bg);
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
     }
-    main { max-width: 1100px; margin: 0 auto; padding: 28px 20px 72px; }
-    h1 { font-size: 24px; font-weight: 650; margin: 0 0 8px; }
-    h2 { font-size: 18px; font-weight: 650; margin: 36px 0 10px; }
-    h3 { font-size: 15px; font-weight: 650; margin: 0 0 8px; }
-    .tag {
-      display: inline-block;
-      font-size: 11px;
-      font-weight: 650;
-      padding: 1px 7px;
-      border-radius: 4px;
-      margin-right: 6px;
-      vertical-align: 1px;
+    main { max-width: none; margin: 0; padding: 36px 48px 80px; }
+    h1, h2, h3 { hyphens: none; break-after: avoid; max-width: 68rem; font-weight: 600; }
+    h1 { font-size: 22px; line-height: 1.3; margin: 0 0 0.5em; }
+    h2 {
+      font-size: 20px;
+      line-height: 1.3;
+      margin: 1.6rem 0 0.45rem;
+      padding-top: 0;
+      border-top: none;
     }
-    .tag-less { background: var(--less-bg); color: var(--less); }
-    .tag-seq { background: var(--seq-bg); color: var(--seq); }
-    .tag-batch { background: var(--batch-bg); color: var(--batch); }
-    .tag-free { background: var(--free-bg); color: var(--free); }
-    p, figcaption { color: var(--muted); margin: 0 0 12px; }
-    a { color: var(--less); }
+    h2:first-of-type { margin-top: 0.5rem; }
+    h3 { font-size: 18px; line-height: 1.35; margin: 1.25rem 0 0.35rem; color: var(--ink); }
+    h2, h3 { scroll-margin-top: 20px; }
+    main section section {
+      margin-block: 0.5rem 1rem;
+      margin-inline-start: 1rem;
+      padding-inline-start: 1rem;
+      border-inline-start: 1px solid var(--line);
+    }
+    p { margin: 0 0 0.75em; max-width: 68rem; color: var(--ink); }
+    figcaption, .outline .why { color: var(--muted); }
+    figcaption { max-width: 68rem; font-size: 14px; line-height: 1.4; }
+    ul { margin: 0 0 0.75em; padding-inline-start: 1.25em; max-width: 68rem; }
+    li { color: var(--ink); }
+    main a { color: var(--less); text-decoration-thickness: 1px; text-underline-offset: 2px; }
     code {
       font-family: ui-monospace, Consolas, monospace;
-      font-size: 13px;
+      font-size: 0.875em;
       background: #e7e5e4;
       padding: 1px 5px;
       border-radius: 3px;
@@ -62,15 +72,27 @@
       padding: 12px 14px;
       border-radius: 8px;
       overflow: auto;
-      font: 13px/1.45 ui-monospace, Consolas, monospace;
+      font: 0.875em/1.55 ui-monospace, Consolas, monospace;
       margin: 0 0 14px;
+      max-width: 68rem;
     }
-    .lede { font-size: 16px; color: var(--ink); max-width: 52em; }
+    .governing {
+      font-size: 16px;
+      line-height: 1.45;
+      color: var(--ink);
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 18px 20px;
+      margin: 16px 0 18px;
+      max-width: 68rem;
+    }
     .motto {
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 10px;
-      margin: 16px 0 8px;
+      margin: 0 0 16px;
+      max-width: 68rem;
     }
     .motto a {
       text-decoration: none;
@@ -78,700 +100,449 @@
       background: var(--paper);
       border: 1px solid var(--line);
       border-radius: 10px;
-      padding: 14px 14px 12px;
+      padding: 12px 12px 10px;
       display: block;
     }
-    .motto strong { display: block; font-size: 22px; margin-bottom: 4px; }
-    .motto .m1 strong { color: var(--less); }
-    .motto .m2 strong { color: var(--seq); }
-    .motto .m3 strong { color: var(--batch); }
-    .motto .m4 strong { color: var(--free); }
-    .motto span { color: var(--muted); font-size: 13px; }
+    .motto strong { display: block; font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+    .m1 strong { color: var(--less); }
+    .m2 strong { color: var(--seq); }
+    .m3 strong { color: var(--batch); }
+    .m4 strong { color: var(--free); }
+    .motto span { color: var(--muted); font-size: 14px; line-height: 1.45; }
+    .tag {
+      display: inline-block;
+      font-size: 14px;
+      font-weight: 600;
+      padding: 1px 7px;
+      border-radius: 4px;
+      margin-right: 6px;
+      vertical-align: 1px;
+    }
+    .tag-less { background: var(--less-bg); color: var(--less); }
+    .tag-seq { background: var(--seq-bg); color: var(--seq); }
+    .tag-batch { background: var(--batch-bg); color: var(--batch); }
+    .tag-free { background: var(--free-bg); color: var(--free); }
+    h2 .tag { font-size: 14px; line-height: 1.4; padding: 2px 8px; }
+    #less ~ .layer-claim { border-left-color: var(--less); }
+    #seq ~ .layer-claim { border-left-color: var(--seq); }
+    #batch ~ .layer-claim { border-left-color: var(--batch); }
+    #free ~ .layer-claim { border-left-color: var(--free); }
     figure {
       background: var(--paper);
       border: 1px solid var(--line);
       border-radius: 10px;
       padding: 16px;
       margin: 0 0 12px;
+      max-width: 68rem;
     }
     svg { display: block; width: 100%; height: auto; }
-    .grid2 {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-      margin: 0 0 12px;
-    }
-    .grid3 {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      gap: 12px;
-      margin: 0 0 12px;
-    }
-    .card {
-      background: var(--paper);
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 14px;
-    }
-    .card p { margin: 0; font-size: 13px; }
-    .warn {
-      background: var(--warn-bg);
-      border: 1px solid #fda4af;
-      border-radius: 10px;
-      padding: 12px 14px;
-      margin: 8px 0 16px;
-      color: var(--warn);
-      font-size: 14px;
-    }
-    .warn strong { color: var(--warn); }
     table {
       width: 100%;
       border-collapse: collapse;
       background: var(--paper);
       font-size: 14px;
-      margin: 0 0 16px;
+      margin: 0 0 14px;
     }
     th, td {
-      border: 1px solid var(--line);
-      padding: 8px 10px;
-      text-align: left;
+      border: none;
+      border-bottom: 1px solid var(--line);
+      padding: 0.5em 1em;
+      text-align: start;
       vertical-align: top;
     }
-    th { background: #e7e5e4; font-weight: 600; }
+    th { font-weight: 600; color: var(--ink); border-bottom: 1px solid var(--ink); }
+    table { font-variant-numeric: tabular-nums; }
+    .layer-claim {
+      font-size: 16px;
+      line-height: 1.45;
+      color: var(--ink);
+      font-weight: 400;
+      background: none;
+      border: none;
+      padding: 0;
+      margin: 0 0 10px;
+      max-width: 68rem;
+    }
+    .warn {
+      background: var(--warn-bg);
+      border: 1px solid #fda4af;
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin: 16px 0;
+      font-size: 14px;
+      color: var(--warn);
+    }
+    .warn strong { color: var(--warn); }
+    .outline {
+      position: sticky;
+      top: 0;
+      height: 100dvh;
+      overflow: auto;
+      background: #f3f1ec;
+      border-inline-end: 1px solid var(--line);
+      padding-block: 18px 28px;
+      padding-inline: 14px 12px;
+      margin: 0;
+    }
+    .outline > p { margin: 0 0 8px; color: var(--ink); font-weight: 600; font-size: 14px; }
+    .outline ol { margin: 0 0 8px; padding-left: 0; list-style: none; }
+    .outline ol ol { padding-inline-start: 1rem; }
+    .outline li { margin: 4px 0; color: var(--ink); font-size: 14px; line-height: 1.5; }
+    .outline a { color: var(--ink); text-decoration: none; }
+    .outline a:hover { text-decoration: underline; }
+    .outline .why { display: block; color: var(--muted); font-weight: 400; font-size: 14px; line-height: 1.45; margin-top: 1px; }
+    .outline ol ol a { color: var(--muted); }
     details {
       background: var(--paper);
       border: 1px solid var(--line);
       border-radius: 10px;
       padding: 10px 14px;
-      margin: 0 0 8px;
+      margin: 8px 0 16px;
+      max-width: 68rem;
     }
-    summary { cursor: pointer; font-weight: 600; }
-    details p { margin: 8px 0 0; }
-    .steps {
-      display: grid;
-      grid-template-columns: 32px 1fr;
-      gap: 8px 12px;
-      margin: 8px 0 0;
-    }
-    .n {
-      width: 28px; height: 28px; border-radius: 50%;
-      background: #1c1917; color: #fff;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 13px; font-weight: 650;
-      margin-top: 2px;
-    }
-    .toc {
-      display: flex; flex-wrap: wrap; gap: 8px 14px;
-      font-size: 13px; margin: 4px 0 18px;
-    }
-    .toc a { color: var(--muted); }
+    summary { cursor: pointer; font-weight: 600; color: var(--muted); }
+    details p { margin: 8px 0 0; color: var(--muted); }
+    .outline > ol > li > a { font-weight: 600; }
+    .grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
     @media (max-width: 860px) {
+      body { grid-template-columns: 1fr; }
+      main { padding: 24px 16px 48px; }
+      .outline { position: static; height: auto; border-inline-end: none; border-bottom: 1px solid var(--line); }
       .motto { grid-template-columns: 1fr 1fr; }
-      .grid2, .grid3 { grid-template-columns: 1fr; }
+      .grid2 { grid-template-columns: 1fr; }
     }
-    @media (max-width: 520px) {
-      .motto { grid-template-columns: 1fr; }
-    }
+    @media (max-width: 480px) { .motto { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
+  <nav class="outline" aria-label="讲解目录">
+    <p>目录</p>
+    <ol>
+      <li><a href="#gang">1. 纲领</a></li>
+      <li><a href="#sql">2. 贯穿例子</a></li>
+      <li><a href="#path">3. 四层路径</a></li>
+      <li>
+        <a href="#less">4. 少读</a>
+        <ol>
+          <li><a href="#less-day">4.1 先扔整天</a></li>
+          <li><a href="#less-granule">4.2 再扔整叠</a></li>
+          <li><a href="#less-col">4.3 最后只开用到的列</a></li>
+          <li><a href="clickhouse-compress-skip.html">4.4 少读放大</a></li>
+        </ol>
+      </li>
+      <li>
+        <a href="#seq">5. 顺读</a>
+        <ol>
+          <li><a href="#seq-append">5.1 写入只往后追加</a></li>
+          <li><a href="#seq-order">5.2 排序把要的行挤在一起</a></li>
+          <li><a href="#seq-merge">5.3 后台把小文件订成大文件</a></li>
+        </ol>
+      </li>
+      <li>
+        <a href="#batch">6. 批算</a>
+        <ol>
+          <li><a href="#batch-core">6.1 单核怎么算</a></li>
+          <li><a href="#batch-who">6.2 谁和谁一起算</a></li>
+        </ol>
+      </li>
+      <li>
+        <a href="#free">7. 别挡</a>
+        <ol>
+          <li><a href="#free-lock">7.1 读写不必按行互锁</a></li>
+          <li><a href="#free-rewrite">7.2 改历史要重写整本</a></li>
+          <li><a href="#free-local">7.3 计算留在数据旁边</a></li>
+        </ol>
+      </li>
+      <li><a href="#edge">8. 各层对照放在哪</a></li>
+      <li><a href="#more">9. 细图与磁盘文件</a></li>
+      <li><a href="#quiz">10. 自测</a></li>
+    </ol>
+  </nav>
   <main>
-    <h1>ClickHouse 高性能怎么记</h1>
-    <p class="lede">按「一句总纲 + 一条例子 + 三层人话 + 别记错」来记。不要背 18 条术语。</p>
-    <nav class="toc">
-      <a href="#gang">总纲</a>
-      <a href="#ex">贯穿例子</a>
-      <a href="#files">文件结构</a>
-      <a href="#store">存储：少读+顺读</a>
-      <a href="#query">查询：批算</a>
-      <a href="#frame">框架：别挡</a>
-      <a href="#kou">口诀对照</a>
-      <a href="#quiz">自测</a>
-    </nav>
+    <h1>ClickHouse 整体怎么记</h1>
 
-    <h2 id="gang">总纲</h2>
-    <p>ClickHouse 快，是因为分析查询 <strong>少读、顺读、批算、别挡</strong>：只碰需要的列和数据段，磁盘顺序扫，CPU 按列块用 SIMD 算，并且不为行级事务买单。</p>
-    <div class="motto">
-      <a class="m1" href="#store"><strong>少读</strong><span>只碰需要的列和数据段</span></a>
-      <a class="m2" href="#store"><strong>顺读</strong><span>磁盘按排序键顺序扫</span></a>
-      <a class="m3" href="#query"><strong>批算</strong><span>CPU 按列块用 SIMD 算</span></a>
-      <a class="m4" href="#frame"><strong>别挡</strong><span>不为行级事务买单</span></a>
+<section>
+    <h2 id="gang">1. 纲领</h2>
+    <div class="governing">
+      ClickHouse 分析查询快，是因为一路只做四件事：<strong>少读、顺读、批算、别挡</strong>——只碰该碰的列和段，磁盘顺着排序键扫，CPU 按列块算，并且不为行级事务买单。
     </div>
+    <div class="motto">
+      <a class="m1" href="#less"><strong>少读</strong><span>少打开天、叠和列</span></a>
+      <a class="m2" href="#seq"><strong>顺读</strong><span>要读的字节连成一段</span></a>
+      <a class="m3" href="#batch"><strong>批算</strong><span>进内存之后怎么算</span></a>
+      <a class="m4" href="#free"><strong>别挡</strong><span>不为改一行付钱</span></a>
+    </div>
+    <p>四层各管查询路径上的一段。先读每层开头的主张；层里的格回答的是同一个问题的不同侧面。</p>
 
-    <h2 id="ex">贯穿例子：搬书 vs 剪报</h2>
-    <p>表 <code>ads_click</code> 有 80 列、每天几十亿行。查询只要：昨天、某广告位、计划 99、<code>sum(fee)</code>。后面五步、少读四张、跳数细图，都用这一句。</p>
+</section>
+<section>
+    <h2 id="sql">2. 贯穿例子</h2>
+    <p>下面每一层都用同一句查询来钉住。表 <code>ads_click</code> 有 80 列，一天几十亿行。这句只要昨天、一个广告位、一个计划的费用合计，真正用到的只有 <code>date</code>、<code>slot_id</code>、<code>campaign_id</code>、<code>fee</code> 四列。</p>
     <pre>SELECT sum(fee)
 FROM ads_click
 WHERE date = yesterday()
   AND slot_id = 1001
   AND campaign_id = 99</pre>
+    <p>对照着看：行式存储常常把命中行里的 80 列一起搬出来。这里从读盘开始就只碰这四列。</p>
 
+</section>
+<section>
+    <h2 id="path">3. 四层路径</h2>
+    <p>一次查询从左往右走完四层：先少碰字节，再让留下的字节连着读，再在内存里算成 <code>sum(fee)</code>，全程不为「改某一行并立刻加锁」付钱。图只标出顺序，每一层的机制在下面展开。</p>
     <figure>
-      <svg viewBox="0 0 1000 280" role="img" aria-label="行式像搬整本书，列式像按栏目剪报">
-        <text x="20" y="24" font-size="14" font-weight="600">行式库 = 按「本」借书</text>
-        <rect x="20" y="40" width="440" height="200" fill="#fff" stroke="#d6d3d1"/>
-        <rect x="48" y="60" width="160" height="160" fill="#e7e5e4" stroke="#44403c"/>
-        <text x="72" y="110" font-size="12">80 列订成一本</text>
-        <text x="78" y="132" font-size="12">date slot … fee</text>
-        <text x="90" y="168" font-size="12" fill="#9a3412">只要看 fee</text>
-        <text x="68" y="190" font-size="12" fill="#9a3412">也得把整本搬下</text>
-        <path d="M228 140 L268 140" stroke="#57534e" stroke-width="2" marker-end="url(#arr)"/>
-        <rect x="280" y="88" width="156" height="104" fill="#ffedd5" stroke="#9a3412"/>
-        <text x="302" y="128" font-size="13" font-weight="600">IO：整行</text>
-        <text x="294" y="152" font-size="12">77 列白搬</text>
-        <text x="294" y="174" font-size="12">随机页来回翻</text>
-
-        <text x="500" y="24" font-size="14" font-weight="600">ClickHouse = 报纸按栏目裁开</text>
-        <rect x="500" y="40" width="480" height="200" fill="#fff" stroke="#d6d3d1"/>
-        <rect x="516" y="64" width="44" height="140" fill="#dbeafe" stroke="#1d4ed8"/>
-        <text x="524" y="136" font-size="11" transform="rotate(-90 536 136)">date</text>
-        <rect x="566" y="64" width="44" height="140" fill="#dbeafe" stroke="#1d4ed8"/>
-        <text x="574" y="138" font-size="11" transform="rotate(-90 586 138)">slot</text>
-        <rect x="616" y="64" width="44" height="140" fill="#dbeafe" stroke="#1d4ed8"/>
-        <text x="618" y="148" font-size="11" transform="rotate(-90 636 148)">campaign</text>
-        <rect x="666" y="64" width="44" height="140" fill="#dbeafe" stroke="#1d4ed8"/>
-        <text x="676" y="136" font-size="11" transform="rotate(-90 686 136)">fee</text>
-        <rect x="724" y="64" width="24" height="140" fill="#e7e5e4"/>
-        <rect x="754" y="64" width="24" height="140" fill="#e7e5e4"/>
-        <rect x="784" y="64" width="24" height="140" fill="#e7e5e4"/>
-        <text x="724" y="224" font-size="12" fill="#57534e">另外 76 叠不打开</text>
-        <text x="516" y="224" font-size="12">查询是剪报，不是搬书</text>
-        <defs>
-          <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L6,3 L0,6 Z" fill="#57534e"/>
-          </marker>
-        </defs>
+      <svg viewBox="0 0 880 160" role="img" aria-label="少读顺读批算别挡四层路径">
+        <rect x="20" y="36" width="180" height="72" fill="#dbeafe" stroke="#1d4ed8"/>
+        <text x="36" y="64" font-size="14" font-weight="600">少读</text>
+        <text x="36" y="84" font-size="12">先扔整天，再扔整叠</text>
+        <text x="36" y="100" font-size="11" fill="#57534e">留下的只开用到的列</text>
+        <text x="210" y="78" font-size="20" fill="#57534e">→</text>
+        <rect x="240" y="36" width="180" height="72" fill="#dcfce7" stroke="#166534"/>
+        <text x="256" y="64" font-size="14" font-weight="600">顺读</text>
+        <text x="256" y="88" font-size="12">要读的字节连成一段</text>
+        <text x="430" y="78" font-size="20" fill="#57534e">→</text>
+        <rect x="460" y="36" width="180" height="72" fill="#ffedd5" stroke="#9a3412"/>
+        <text x="476" y="64" font-size="14" font-weight="600">批算</text>
+        <text x="476" y="88" font-size="12">按块算；多核与多机</text>
+        <text x="650" y="78" font-size="20" fill="#57534e">→</text>
+        <rect x="680" y="36" width="170" height="72" fill="#f3e8ff" stroke="#6b21a8"/>
+        <text x="696" y="64" font-size="14" font-weight="600">别挡</text>
+        <text x="696" y="88" font-size="12">不为改一行付钱</text>
       </svg>
-      <figcaption>同一句 SQL：行式搬整本；列式只剪 date / slot / campaign / fee 四叠。行式「整本」是教学概括——带覆盖索引的行存可能不必回表读完整行。</figcaption>
+      <figcaption>压缩与跳数那一页，是把「少读」里的变薄和扔叠放大来讲。</figcaption>
     </figure>
 
-    <p>数据实际走的五步：</p>
+</section>
+<section>
+    <h2 id="less">4. 少读</h2>
+    <p class="layer-claim">主张：在任何加法发生之前，先少打开东西。表按天分成许多本，每本里的行再分成许多叠，每叠里每列各是一个文件。这一层只回答：这句查询哪些天、哪些叠、哪些列可以不打开。</p>
+    <p>按「少打开哪一种东西」分成三格。三格是漏斗：先扔整天，再在留下的那天里扔整叠，最后在留下的叠里只开用到的列。</p>
+
+<section>
+    <h3 id="less-day">4.1 先扔整天</h3>
+    <p class="layer-claim">主张：查询只要昨天时，前天那一本文件夹一次都不打开。</p>
+    <p><code>ads_click</code> 按 <code>date</code> 分成一天一本。每本上记着自己的日期范围。引擎先看这个范围：对不上昨天的本，里面的列文件都不碰。这一格发生在打开任何一列之前。</p>
+
+</section>
+<section>
+    <h3 id="less-granule">4.2 再扔整叠</h3>
+    <p class="layer-claim">主张：在留下的那一本里，先证明某一叠不可能含有要的行，这一整叠就不用读。</p>
+    <p>行在本子里按 <code>(date, slot_id)</code> 排好序，同一天、同一广告位挤在一起。稀疏主键像章节目录，只记下每叠第一行的键，所以能把「昨天且广告位 1001」收成连续的一段叠，其余叠放下。</p>
+    <p><code>campaign_id</code> 不在这组排序键里，目录帮不上。写入时给每一叠另贴一张便利贴，记下这叠计划号的最小值和最大值。查询要 99：最小值到最大值里夹不住 99，整叠不读。排序目录和这张便利贴都能扔叠，问的问题不同。目录问「这一段排好的键对不对得上」；便利贴问「这叠里有没有可能出现 99」。</p>
     <figure>
-      <svg viewBox="0 0 1000 430" role="img" aria-label="一条查询的五步：定位、读盘、过滤、计算、偷懒">
-        <text x="20" y="26" font-size="14" font-weight="600">1. 定位 · 稀疏主键，二分到 granule</text>
-        <g font-size="12">
-          <rect x="20" y="40" width="70" height="36" fill="#e7e5e4"/><text x="38" y="62">G1</text>
-          <rect x="96" y="40" width="70" height="36" fill="#e7e5e4"/><text x="114" y="62">G2</text>
-          <rect x="172" y="40" width="70" height="36" fill="#ffedd5" stroke="#9a3412"/><text x="190" y="62">G3</text>
-          <rect x="248" y="40" width="70" height="36" fill="#ffedd5" stroke="#9a3412"/><text x="266" y="62">G4</text>
-          <rect x="324" y="40" width="70" height="36" fill="#e7e5e4"/><text x="342" y="62">G5</text>
-          <rect x="400" y="40" width="70" height="36" fill="#e7e5e4"/><text x="418" y="62">…</text>
-        </g>
-        <text x="490" y="52" font-size="12">ORDER BY (date, slot) 已排好</text>
-        <text x="490" y="72" font-size="12">默认约每 8192 行一个标记；自适应还受 index_granularity_bytes 约束</text>
-        <text x="20" y="104" font-size="12" fill="#57534e">灰叠主键对不上；橙叠才可能有「昨天 × 广告位 1001」</text>
-
-        <text x="20" y="140" font-size="14" font-weight="600">2. 读盘 · 只打开 4 个列文件，顺序读压缩块</text>
-        <g font-size="12">
-          <rect x="20" y="154" width="170" height="44" fill="#dbeafe" stroke="#1d4ed8"/>
-          <text x="32" y="180">date.bin 顺扫</text>
-          <rect x="200" y="154" width="170" height="44" fill="#dbeafe" stroke="#1d4ed8"/>
-          <text x="212" y="180">slot.bin 顺扫</text>
-          <rect x="380" y="154" width="190" height="44" fill="#dbeafe" stroke="#1d4ed8"/>
-          <text x="392" y="180">campaign.bin 顺扫</text>
-          <rect x="580" y="154" width="160" height="44" fill="#dbeafe" stroke="#1d4ed8"/>
-          <text x="592" y="180">fee.bin 顺扫</text>
-          <rect x="750" y="154" width="230" height="44" fill="#e7e5e4"/>
-          <text x="762" y="180">ua / ip / … 76 列不打开</text>
-        </g>
-
-        <text x="20" y="232" font-size="14" font-weight="600">3. 过滤 · 主键留下的叠上，再用 minmax/布隆扔块</text>
-        <g font-size="12">
-          <rect x="20" y="246" width="150" height="40" fill="#dcfce7" stroke="#166534"/><text x="36" y="270">G3 campaign 跳过</text>
-          <rect x="182" y="246" width="150" height="40" fill="#ffedd5" stroke="#9a3412"/><text x="210" y="270">G4 读盘</text>
-        </g>
-        <text x="360" y="270" font-size="12">G1 G2 G5 已在主键阶段扔掉。本页示例 INDEX GRANULARITY 1，一贴约一叠</text>
-
-        <text x="20" y="322" font-size="14" font-weight="600">4. 计算 · fee 这一列 SIMD 求和；多核分段，多节点各算分片</text>
-        <g font-size="12">
-          <rect x="20" y="336" width="300" height="36" fill="#ffedd5" stroke="#9a3412"/>
-          <text x="36" y="358">[1.2  0.8  3.1  0.4 …]  →  sum  一块一指令</text>
-          <rect x="334" y="336" width="200" height="36" fill="#fff" stroke="#d6d3d1"/>
-          <text x="350" y="358">核1 | 核2 | 核3 | 核4</text>
-          <rect x="548" y="336" width="280" height="36" fill="#fff" stroke="#d6d3d1"/>
-          <text x="564" y="358">节点A分片 + 节点B分片 → 汇总</text>
-        </g>
-
-        <text x="20" y="404" font-size="14" font-weight="600">5. 偷懒 · 看板天天同一句，物化视图里已经有日汇总</text>
-        <text x="520" y="404" font-size="12" fill="#57534e">柜台已经日结，不必每晚把流水再加一遍</text>
+      <svg viewBox="0 0 640 120" role="img" aria-label="排序目录收成一段叠，便利贴再扔掉夹不住 99 的叠">
+        <rect x="8" y="28" width="300" height="72" fill="#dbeafe" stroke="#1d4ed8"/>
+        <text x="20" y="52" font-size="13" font-weight="600">排序目录</text>
+        <text x="20" y="74" font-size="12">昨天 × 广告位 1001</text>
+        <text x="20" y="92" font-size="12">收成连续的一段叠</text>
+        <text x="324" y="70" font-size="18" fill="#57534e">→</text>
+        <rect x="352" y="28" width="276" height="72" fill="#dcfce7" stroke="#166534"/>
+        <text x="364" y="52" font-size="13" font-weight="600">便利贴</text>
+        <text x="364" y="74" font-size="12">这叠计划号从 1 到 15</text>
+        <text x="364" y="92" font-size="12">99 夹不住，整叠不读</text>
       </svg>
-      <figcaption>查询时的顺序：1 少读（目录）→ 2 少读+顺读（只开四列、顺扫扁块）→ 3 少读（便利贴再扔叠）→ 4 批算 → 5 批算偷懒（物化）。INSERT 与 SELECT 不按行互锁；后台 merge/mutation 仍会抢资源。</figcaption>
-    </figure>
-    <h3 id="mem">查询时谁会被用到</h3>
-    <p><code>.idx</code> <strong>不是每列一份</strong>，查询也<strong>不会</strong>把表上全部 <code>.idx</code> 一次性读进内存。80 列里绝大多数根本没有 <code>.idx</code>，只有 <code>.bin</code> 和 <code>.mrk2</code>。</p>
-    <p>真正叫 idx 的只有三类，而且按本句 SQL 选用：</p>
-    <table>
-      <thead>
-        <tr><th>文件</th><th>磁盘上有几份</th><th>本句 SQL 会不会用</th></tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td><code>primary.idx</code></td>
-          <td>每个 part 一份，只记 ORDER BY（date, slot）的 granule 边界，不是 80 列各一份</td>
-          <td>扫描这个 part 时会按需读取/利用。可能已在缓存里；新版本也可能流式读，不保证一次性整份载入。WHERE 带 date/slot 时用它扔叠</td>
-        </tr>
-        <tr>
-          <td><code>skp_idx_idx_campaign.idx</code></td>
-          <td>因为建了 <code>INDEX idx_campaign</code>，每个 part 一份</td>
-          <td>按需读取/利用（可能走缓存）。WHERE 有 <code>campaign_id = 99</code>，对得上</td>
-        </tr>
-        <tr>
-          <td><code>skp_idx_idx_user.idx</code></td>
-          <td>因为建了 <code>INDEX idx_user</code>，每个 part 一份</td>
-          <td><strong>不读</strong>。本句 SQL 没有 user_id，这份布隆闲着</td>
-        </tr>
-        <tr>
-          <td><code>minmax_date.idx</code></td>
-          <td>分区键自动生成，每个 part 一份</td>
-          <td>分区表达式的 part 级 min/max，可参与 part/partition pruning。不是用户定义的跳数 INDEX</td>
-        </tr>
-        <tr>
-          <td>其余列</td>
-          <td>没有 <code>.idx</code></td>
-          <td>无从读 idx。需要读数据时才打开对应列的 <code>.bin</code> / <code>.mrk2</code></td>
-        </tr>
-      </tbody>
-    </table>
-    <p>一句话：查询会按需读取/利用「这个 part 的主键目录」加上「本句 WHERE 用得上的跳数索引」。可能走缓存，新版本也可能流式读索引，不保证一次性把小文件完整载入。不是全部列，也不是表上声明过的全部 INDEX。</p>
-    <p>对上面那句 SQL，读路径如下。</p>
-    <figure>
-      <svg viewBox="0 0 1000 340" role="img" aria-label="先按需读两份小索引，再按需打开列压缩块">
-        <text x="20" y="24" font-size="14" font-weight="600">先按需读旁路小文件（常被缓存；不保证一次性整份载入）</text>
-        <rect x="20" y="40" width="470" height="88" fill="#dbeafe" stroke="#1d4ed8"/>
-        <text x="36" y="68" font-size="13" font-weight="600">稀疏主键 · primary.idx</text>
-        <text x="36" y="90" font-size="12">默认约每 8192 行一个排序键标记（date, slot 边界）</text>
-        <text x="36" y="110" font-size="12">管 ORDER BY 列。按需读这份目录，二分找叠</text>
-        <rect x="510" y="40" width="470" height="88" fill="#dcfce7" stroke="#166534"/>
-        <text x="526" y="68" font-size="13" font-weight="600">跳数索引 · skp_idx_*.idx</text>
-        <text x="526" y="90" font-size="12">只读 WHERE 用得上的那几份，不是表上所有 INDEX</text>
-        <text x="526" y="110" font-size="12">本句读 campaign 的 minmax；user 的布隆不读</text>
-        <text x="20" y="154" font-size="12" fill="#57534e">另外还有 .mrk 标记文件：记录每一叠压缩块在 .bin 里的偏移，也小，用来 seek 到那一叠。</text>
-        <text x="20" y="186" font-size="14" font-weight="600">然后才读列数据 .bin（按需，绝不整表）</text>
-        <rect x="20" y="202" width="220" height="56" fill="#e7e5e4"/>
-        <text x="36" y="226" font-size="12">76 列的 .bin</text>
-        <text x="36" y="244" font-size="12">不打开、不进内存</text>
-        <rect x="252" y="202" width="240" height="56" fill="#dcfce7" stroke="#166534"/>
-        <text x="268" y="226" font-size="12">四列里被扔掉的叠</text>
-        <text x="268" y="244" font-size="12">压缩块不读、不解压</text>
-        <rect x="504" y="202" width="476" height="56" fill="#ffedd5" stroke="#9a3412"/>
-        <text x="520" y="226" font-size="12">四列里留下的叠：打开 .bin，解压进内存</text>
-        <text x="520" y="244" font-size="12">在列块上 SIMD。仍然不是 80 列，也不是全部 granule</text>
-        <text x="20" y="286" font-size="12">分区键先砍 part：不是「昨天」的 part，索引和 .bin 都不会读。</text>
-        <text x="20" y="310" font-size="12">没有跳数 INDEX 时，没有 skp_idx 可读，主键留下的每一叠都要打开对应列的 .bin。</text>
-        <text x="20" y="334" font-size="12">查询不带 ORDER BY 列时，primary.idx 帮不上过滤；有对得上的跳数索引则仍可读 skp_idx 扔叠。</text>
-      </svg>
-      <figcaption>idx 按本句 SQL 选用。列数据只有「需要的列 × 没被扔掉的叠」解压后参与计算。</figcaption>
-    </figure>
-    <h2 id="files">磁盘上完整文件结构</h2>
-    <p>MergeTree 不把一张表收成一个大文件。表目录里是许多不可变 <strong>part</strong>；每个 part 是一个文件夹。上面说的 <code>primary.idx</code>、<code>skp_idx_*.idx</code>、列 <code>.bin</code> 都在这个文件夹里。默认数据根目录是 <code>/var/lib/clickhouse</code>（Windows / 改过配置则看 <code>path</code>）。</p>
-
-    <figure>
-      <svg viewBox="0 0 1000 250" role="img" aria-label="从 clickhouse 根目录到表、分区 part 的层级">
-        <text x="20" y="24" font-size="14" font-weight="600">三层目录：元数据一份，数据按 part 堆</text>
-        <rect x="20" y="40" width="300" height="72" fill="#fff" stroke="#d6d3d1"/>
-        <text x="36" y="68" font-size="12" font-weight="600">metadata/</text>
-        <text x="36" y="90" font-size="12">default/ads_click.sql</text>
-        <text x="36" y="108" font-size="11" fill="#57534e">建表语句，不是数据</text>
-        <rect x="340" y="40" width="640" height="190" fill="#fff" stroke="#d6d3d1"/>
-        <text x="356" y="68" font-size="12" font-weight="600">data/default/ads_click/</text>
-        <text x="356" y="90" font-size="12">format_version.txt　detached/</text>
-        <rect x="356" y="108" width="180" height="44" fill="#e7e5e4"/>
-        <text x="368" y="128" font-size="11">20261010_1_1_0</text>
-        <text x="368" y="144" font-size="11">前天的小 part</text>
-        <rect x="548" y="108" width="200" height="44" fill="#ffedd5" stroke="#9a3412"/>
-        <text x="560" y="128" font-size="11">20261011_1_1_0</text>
-        <text x="560" y="144" font-size="11">昨天 INSERT 来的</text>
-        <rect x="760" y="108" width="200" height="44" fill="#dcfce7" stroke="#166534"/>
-        <text x="772" y="128" font-size="11">20261011_1_2_1</text>
-        <text x="772" y="144" font-size="11">merge 合订后的大 part</text>
-        <text x="356" y="176" font-size="12">part 名：分区值_最小块号_最大块号_层级</text>
-        <text x="356" y="198" font-size="12">20261011 = PARTITION date；_1_1_0 = 一次插入；层级变大 = 合过</text>
-        <text x="356" y="220" font-size="12" fill="#57534e">查询 WHERE date=昨天：前天那个文件夹整本不打开。</text>
-      </svg>
-      <figcaption>INSERT 追加新 part，不改旧文件夹。后台 merge 写出层级更高的新文件夹，旧的再删。这就是「记流水账，晚上合订」。</figcaption>
+      <figcaption>左格用排序把范围收窄，右格用预先记好的最小最大再扔叠。<a href="clickhouse-compress-skip.html">压缩与跳数把这两步画开 →</a></figcaption>
     </figure>
 
-    <p>下面打开昨天的一个 <strong>wide part</strong>（列多、行够多、默认自适应粒度）：每列一对 <code>.bin</code> + <code>.mrk2</code>。行数或体积不够时收成 compact part：同时看 <code>min_bytes_for_wide_part</code> 和 <code>min_rows_for_wide_part</code> 等，不是只看字节。compact 是一份 <code>data.bin</code> + <code>data.mrk3</code>，角色相同。关自适应粒度时标记文件是 <code>.mrk</code> 不是 <code>.mrk2</code>。</p>
-    <pre>data/default/ads_click/20261011_1_1_0/
-├── checksums.txt                 各文件校验
-├── columns.txt                   本 part 有哪些列
-├── count.txt                     行数
-├── default_compression_codec.txt 默认压缩算法
-├── metadata_version.txt          较新版本常见
-├── serialization.json            较新版本：列序列化版本
-├── partition.dat                 这个 part 的分区值
-├── minmax_date.idx               分区表达式用到的列，在本 part 内的 min/max
-├── primary.idx                   稀疏主键目录（ORDER BY 边界值）
+</section>
+<section>
+    <h3 id="less-col">4.3 最后只开用到的列</h3>
+    <p class="layer-claim">主张：决定要读的那些叠里，只打开这句查询用到的列。压缩让每一列在盘上更薄，不决定打开哪一列。</p>
+    <p>80 列里只用到四列，其余 76 列的文件不打开。打开的四列里，同列的值排在一起，压完之后盘上的字节更少。解压之后，才在叠里面做精确的 <code>WHERE</code>，把仍然对不上的行去掉。</p>
+    <p><strong>边界。</strong>解压后立刻过滤，仍是少读：少做后面的计算。一条指令同时加多个 <code>fee</code>，归批算。这些字节在盘上是否连成一段，归顺读。</p>
+    <details>
+      <summary>名称对照（读完上面再查）</summary>
+      <p>一天一本叫 part。一叠默认约 8192 行，叫 granule；叠有多大还受 <code>index_granularity_bytes</code> 约束。每本上的日期范围在 <code>minmax_date.idx</code>，那是分区表达式自己的最小最大，和用户建的跳数索引各是一份文件。排序目录是 <code>primary.idx</code>。便利贴是跳数索引，文件 <code>skp_idx_*.idx</code>；minmax、布隆是它的两种 TYPE。一张便利贴盖住几叠，看 <code>GRANULARITY N</code>，N=1 时大约一叠一张。列文件是 <code>.bin</code>。</p>
+    </details>
+
+</section>
+</section>
+<section>
+    <h2 id="seq">5. 顺读</h2>
+    <p class="layer-claim">主张：少读已经决定要读哪些字节之后，这一层让这些字节在盘上连成一段。读的时候少回头，磁盘可以一直往前吐。</p>
+    <p>按「为什么能连着读」分成三格。三格叠在一起：写入时不改旧文件，排序把要的行挤到一起，后台再把许多小文件订成少数大文件。</p>
+
+<section>
+    <h3 id="seq-append">5.1 写入只往后追加</h3>
+    <p class="layer-claim">主张：新数据写成一本新的、写完就不再改的文件。查询读的是已经写完的文件。</p>
+    <p>一次 INSERT 落成一本新 part，不回头改昨天那本里的某一行。所以读昨天的 <code>fee</code> 时，文件内容是稳定的，扫描可以一路向前。</p>
+
+</section>
+<section>
+    <h3 id="seq-order">5.2 排序把要的行挤在一起</h3>
+    <p class="layer-claim">主张：<code>ORDER BY (date, slot_id)</code> 让同一广告位的行挨着放，过滤约等于扫一段连续字节。</p>
+    <p>广告位 1001 的点击若散落在文件各处，每命中一次就要重新定位。排好序之后，少读留下的那一段叠在盘上是相连的，定位一次，后面是大段顺序读。</p>
+
+</section>
+<section>
+    <h3 id="seq-merge">5.3 后台把小文件订成大文件</h3>
+    <p class="layer-claim">主张：许多本小 part 会在后台合并成少数大 part，顺序扫描的段落因此更长。</p>
+    <p>每次插入都新开一本，文件会越来越多，每本都要单独开头。合并把同一天的小本订成大本，要读的 <code>fee</code> 更少被切成碎片。</p>
+    <figure>
+      <svg viewBox="0 0 640 118" role="img" aria-label="散落的小段订成一段连续的广告位 1001">
+        <text x="8" y="18" font-size="13">散落：每找到一次 1001 都要重新定位</text>
+        <rect x="8" y="28" width="36" height="22" fill="#dcfce7" stroke="#166534"/>
+        <rect x="70" y="28" width="28" height="22" fill="#e7e5e4"/>
+        <rect x="120" y="28" width="36" height="22" fill="#dcfce7" stroke="#166534"/>
+        <rect x="190" y="28" width="48" height="22" fill="#e7e5e4"/>
+        <rect x="260" y="28" width="36" height="22" fill="#dcfce7" stroke="#166534"/>
+        <text x="8" y="74" font-size="13">排好并合并之后：1001 连成一段</text>
+        <rect x="8" y="82" width="220" height="22" fill="#dcfce7" stroke="#166534"/>
+        <text x="16" y="98" font-size="12">广告位 1001</text>
+      </svg>
+      <figcaption>绿段是要读的广告位。上面每次都要重新找，下面定位一次后一直往前读。</figcaption>
+    </figure>
+    <p><strong>边界。</strong>定位到某一叠，仍然要先跳到文件里的那个位置；快是因为跳完之后是大段顺扫。改历史数据会重写受影响的那一本，那是别挡里「更新要重写」的事。</p>
+    <details>
+      <summary>名称对照（读完上面再查）</summary>
+      <p>一本写完不再改的文件目录叫 part。后台合并叫 merge。很小的 part 可以把各列收在同一个文件里，大了再拆成一列一个文件；分界看 <code>min_bytes_for_wide_part</code> 和 <code>min_rows_for_wide_part</code>。这只影响一本内部怎么摆列，不改变「要读的行排在一起」这件事。</p>
+    </details>
+
+</section>
+</section>
+<section>
+    <h2 id="batch">6. 批算</h2>
+    <p class="layer-claim">主张：列块已经在内存里之后，CPU 要做的事是把这些数算完，并且让多个核、多台机器同时算。少读和顺读已经决定读哪些字节；这一层只回答这些字节怎样变成 <code>sum(fee)</code>。</p>
+    <p>按「计算怎么摊开」分成两格。第一格问一颗核一次算多少个数。第二格问这些数分给哪些核、哪些机器。两格回答的问题不同。</p>
+
+<section>
+    <h3 id="batch-core">6.1 单核怎么算</h3>
+    <p class="layer-claim">主张：一次调度处理一整段同一列的值，一条指令同时加其中的多个数。</p>
+    <p><code>fee</code> 进内存后是排好的一串数。引擎把这一串切成块，块在过滤、求和这些步骤之间传递。求 <code>sum(fee)</code> 时，一块里的几个数放进 CPU 的宽寄存器，一条加法指令一起加完。若拆成一行一个对象再加，每加一个数都要重新进入函数，时间花在调度上。这一格要记住的原理是：一次调度摊到一整块数上。</p>
+    <figure>
+      <svg viewBox="0 0 640 88" role="img" aria-label="四个 fee 排成一块，一条指令求出和">
+        <text x="8" y="18" font-size="13">一块 fee</text>
+        <rect x="8" y="28" width="64" height="36" fill="#ffedd5" stroke="#9a3412"/>
+        <rect x="76" y="28" width="64" height="36" fill="#ffedd5" stroke="#9a3412"/>
+        <rect x="144" y="28" width="64" height="36" fill="#ffedd5" stroke="#9a3412"/>
+        <rect x="212" y="28" width="64" height="36" fill="#ffedd5" stroke="#9a3412"/>
+        <text x="26" y="51" font-size="14">1.2</text>
+        <text x="94" y="51" font-size="14">0.8</text>
+        <text x="162" y="51" font-size="14">0.5</text>
+        <text x="230" y="51" font-size="14">3.1</text>
+        <text x="292" y="52" font-size="18" fill="#9a3412">→</text>
+        <rect x="324" y="28" width="120" height="36" fill="#ffedd5" stroke="#9a3412"/>
+        <text x="340" y="51" font-size="14">一条指令 = 5.6</text>
+      </svg>
+      <figcaption>左图只说明这一格：同一列的一段数，一次加完。</figcaption>
+    </figure>
+
+</section>
+<section>
+    <h3 id="batch-who">6.2 谁和谁一起算</h3>
+    <p class="layer-claim">主张：同一条查询把互不重叠的数据分给多个执行者，各自先算出部分结果，再合成一个答案。</p>
+    <p>一颗核只有一条计算流水线。昨天的 <code>fee</code> 被切成互不重叠的几段，每段交给一个核，各得到一个部分和，最后把部分和相加，仍是同一个 <code>sum(fee)</code>。部分和越晚合并，并行保持得越久。</p>
+    <p>数据若已经拆在多台机器上，执行者从「核」换成「节点」，算法不变：每台先算自己磁盘上的和，收到查询的那台再把这些和加起来。网上传送的是算完的和，<code>fee</code> 列留在各自的磁盘上。</p>
+    <figure>
+      <svg viewBox="0 0 640 108" role="img" aria-label="多核的部分和合成总数，多机的本地和再加一次">
+        <text x="8" y="18" font-size="13" font-weight="600">多个核</text>
+        <rect x="8" y="28" width="140" height="28" fill="#ffedd5" stroke="#9a3412"/>
+        <text x="16" y="47" font-size="12">核 1 · 部分和 40</text>
+        <rect x="8" y="64" width="140" height="28" fill="#ffedd5" stroke="#9a3412"/>
+        <text x="16" y="83" font-size="12">核 2 · 部分和 26</text>
+        <text x="160" y="64" font-size="18" fill="#9a3412">→</text>
+        <rect x="188" y="46" width="120" height="28" fill="#ffedd5" stroke="#9a3412"/>
+        <text x="204" y="65" font-size="12">本机总数 66</text>
+        <text x="340" y="18" font-size="13" font-weight="600">多台机器</text>
+        <rect x="340" y="28" width="150" height="28" fill="#ffedd5" stroke="#9a3412"/>
+        <text x="348" y="47" font-size="12">节点 A · 本地和 66</text>
+        <rect x="340" y="64" width="150" height="28" fill="#ffedd5" stroke="#9a3412"/>
+        <text x="348" y="83" font-size="12">节点 B · 本地和 19</text>
+        <text x="502" y="64" font-size="18" fill="#9a3412">→</text>
+        <rect x="530" y="46" width="100" height="28" fill="#ffedd5" stroke="#9a3412"/>
+        <text x="546" y="65" font-size="12">总和 85</text>
+      </svg>
+      <figcaption>左边是一台机器里的多个核，右边是多台机器。合的都是已经算好的和。</figcaption>
+    </figure>
+    <p><strong>边界。</strong>用主键和跳数扔掉整段 granule，发生在这些数进入计算之前，归少读。跨分片把另一张表的行拉过来做 JOIN，归别挡。物化视图是查询发出之前就把这种求和做完，看板读的是算好的小表。</p>
+    <details>
+      <summary>名称对照（读完上面再查）</summary>
+      <p>内存里的一块叫 <code>Block</code>，其中一列是 <code>IColumn</code>，整数列就是连续数组。一条指令同时处理多个数，是 SIMD；运行时按 CPU 选择编译好的内核。多个核各算一段，在计划里叫泳道，条数上限是 <code>max_threads</code>（默认约等于核数，数据少就少开）。把各段的部分和加成总数的算子是 <code>GroupStateMerge</code>。多台机器上，<code>Distributed</code> 表把 <code>sum(fee)</code> 推到各分片做本地和，发起节点再加一次。ClickHouse Cloud 里，并行副本扮演分片这个角色。</p>
+      <p>官方：<a href="https://clickhouse.com/docs/development/architecture">向量化与 Block</a>，<a href="https://clickhouse.com/docs/concepts/core-concepts/academic-overview">论文第 4 节（元素 / 块 / 分片）</a>，<a href="https://clickhouse.com/docs/concepts/core-concepts/query-parallelism">泳道如何铺开</a>，<a href="https://clickhouse.com/docs/guides/oss/deployment-and-scaling/shards">分片上的 SELECT</a>。</p>
+    </details>
+
+</section>
+</section>
+<section>
+    <h2 id="free">7. 别挡</h2>
+    <p class="layer-claim">主张：分析查询在跑的时候，不为「改某一行、立刻对所有人可见、并和别的写入互相锁住」这条路径付钱。少读、顺读、批算都假定数据以追加和快照的方式待在那里。</p>
+    <p>按「省下了哪种代价」分成三格。一格是读写不必按行互锁。一格是改历史要重写整本，而不是改一个格子。一格是计算留在数据旁边，少把行搬到另一台机器上再算。</p>
+
+<section>
+    <h3 id="free-lock">7.1 读写不必按行互锁</h3>
+    <p class="layer-claim">主张：正在插入的新行和正在跑的查询，各看各的数据，不用为了某一行互相等待。</p>
+    <p>INSERT 写成一本新 part。SELECT 开始时拿一份「现在有哪些本」的快照，只读这些已经写完的本。新写入的行不插进这条正在跑的 <code>sum(fee)</code>，查询也不把正在插入的行锁住。后台合并小本、重写历史，仍会占用 CPU、磁盘和内存。省下的是行与行之间的等待。</p>
+    <figure>
+      <svg viewBox="0 0 640 88" role="img" aria-label="查询读已经写完的本，插入另写一本新的">
+        <rect x="8" y="28" width="280" height="44" fill="#f3e8ff" stroke="#6b21a8"/>
+        <text x="20" y="46" font-size="13" font-weight="600">SELECT 读快照里的本</text>
+        <text x="20" y="64" font-size="12">昨天的 fee，一路加完</text>
+        <rect x="340" y="28" width="280" height="44" fill="#fff" stroke="#6b21a8"/>
+        <text x="352" y="46" font-size="13" font-weight="600">INSERT 另写一本新的</text>
+        <text x="352" y="64" font-size="12">不改查询正在读的那一本</text>
+      </svg>
+      <figcaption>两边同时进行。查询看不到这本还没写完的新数据。</figcaption>
+    </figure>
+
+</section>
+<section>
+    <h3 id="free-rewrite">7.2 改历史要重写整本</h3>
+    <p class="layer-claim">主张：要改正文里已经写下的行，默认是重写受影响的那一本，而不是只改其中一个格子。</p>
+    <p>传统的更新会把涉及到的 part 按新内容再写一遍。后来可以用轻量删除：先在内部标出哪些行作废，查询时跳过它们，等后台合并时再物理去掉。两种都做得到修改。代价是重写整本，或者先打标记、等合并时再去掉。</p>
+
+</section>
+<section>
+    <h3 id="free-local">7.3 计算留在数据旁边</h3>
+    <p class="layer-claim">主张：<code>sum(fee)</code> 在存放这些行的机器上算完，再把和传出去。把另一张表的行拉过来做 JOIN，要在机器之间搬行。</p>
+    <p>所以分析表常常做成宽表：查询要用的列放在同一张表里，少做跨表、跨机器的拼接。多核一起加 <code>fee</code> 仍是批算；这里说的是行本身要不要离开它的磁盘。</p>
+    <p><strong>边界。</strong>多个核各算一段部分和，归批算。少打开 76 列，归少读。服务进程是一个 <code>clickhouse-server</code> 加线程池，许多查询分用这些线程；这是运行形态，不改变上面三格的代价。</p>
+    <details>
+      <summary>名称对照（读完上面再查）</summary>
+      <p>查询开始时固定下来的那份 part 列表，是基于版本化 part 的快照。重写历史的操作叫 mutation。轻量删除先写一张作废标记，合并时再物理删除。跨分片把行拉去 JOIN，属于这里的「搬行」；各分片本地算完再加总，属于批算。</p>
+    </details>
+
+</section>
+</section>
+<section>
+    <h2 id="edge">8. 各层对照放在哪</h2>
+    <p>文件名、默认行数、参数都在对应层的「名称对照」里。它们帮助把上面的说法对上官方名词，不另成一层口诀。</p>
+
+</section>
+<section>
+    <h2 id="more">9. 细图与磁盘文件</h2>
+    <p><a href="clickhouse-compress-skip.html">少读放大：列为什么更薄，整叠为什么可以不读</a> — 压缩与跳过各回答一个问题。</p>
+    <details>
+      <summary>MergeTree part 里常见文件（查阅用）</summary>
+      <pre>20261011_1_1_0/
+├── partition.dat
+├── minmax_date.idx          # 分区表达式 part 级 min/max
+├── primary.idx              # 稀疏主键
 ├── date.bin / date.mrk2
-├── slot_id.bin / slot_id.mrk2
-├── campaign_id.bin / campaign_id.mrk2
-├── fee.bin / fee.mrk2
-├── … 其余 76 列各一对 .bin + .mrk2
-├── skp_idx_idx_campaign.idx      跳数 INDEX 名 idx_campaign → 文件前缀 skp_idx_
-├── skp_idx_idx_campaign.mrk2
-├── skp_idx_idx_user.idx          跳数 INDEX 名 idx_user
-└── skp_idx_idx_user.mrk2</pre>
+├── … 各列 .bin + .mrk2
+├── skp_idx_idx_campaign.idx # 跳数 INDEX 名 idx_campaign
+└── checksums.txt</pre>
+      <p>查询按需用 <code>primary.idx</code> 与 WHERE 对得上的 <code>skp_idx_*.idx</code>，再打开没被扔掉的列 <code>.bin</code>。不是 80 列各一份 idx，也不是表上全部 INDEX。</p>
+    </details>
 
-    <table>
-      <thead>
-        <tr><th>文件</th><th>角色</th><th>查询时</th></tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td><code>ads_click.sql</code></td>
-          <td>表定义（列、ORDER BY、PARTITION、INDEX）</td>
-          <td>不读数据</td>
-        </tr>
-        <tr>
-          <td>part 文件夹名</td>
-          <td>分区 + 块号 + merge 层级</td>
-          <td>先按分区扔掉整天的文件夹</td>
-        </tr>
-        <tr>
-          <td><code>minmax_date.idx</code></td>
-          <td>分区表达式涉及列在本 part 内的 min/max，自动生成</td>
-          <td>辅助跳过整个 part（尤其范围条件）。砍整天主要靠文件夹名 / <code>partition.dat</code>。不是 <code>INDEX TYPE minmax</code></td>
-        </tr>
-        <tr>
-          <td><code>primary.idx</code></td>
-          <td>稀疏主键，默认约每 8192 行一个排序键标记（自适应还看字节上限）</td>
-          <td>按需读取/利用（常被缓存，不保证一次性整份载入），二分找叠</td>
-        </tr>
-        <tr>
-          <td><code>skp_idx_idx_*.idx</code></td>
-          <td>跳数索引便利贴（名字 = <code>skp_idx_</code> + INDEX 名）</td>
-          <td>按需读取/利用本句 WHERE 对得上的那几份，再扔叠。GRANULARITY N 覆盖 N 个 marks</td>
-        </tr>
-        <tr>
-          <td><code>*.mrk2</code></td>
-          <td>每一叠在对应 <code>.bin</code> 里的偏移</td>
-          <td>小文件，用来 seek 到那一叠</td>
-        </tr>
-        <tr>
-          <td><code>列.bin</code></td>
-          <td>该列压缩数据，按 granule 切块</td>
-          <td>只打开需要的列、没被扔掉的叠</td>
-        </tr>
-        <tr>
-          <td><code>checksums.txt</code> 等</td>
-          <td>完整性、列清单、行数、压缩设置</td>
-          <td>读 part 时核对，不是过滤条件</td>
-        </tr>
-      </tbody>
-    </table>
-    <p class="warn"><strong>别记错 · <code>minmax_date.idx</code> ≠ 用户定义的跳数 INDEX。</strong> 它是分区表达式的 part 级 min/max，可参与 part/partition pruning（尤其范围条件），不要当成完全不用这份文件。砍整天的文件夹，还会看 part 名和 <code>partition.dat</code>。<code>INDEX idx_campaign TYPE minmax</code> 才写成 <code>skp_idx_idx_campaign.idx</code>，用来扔掉 granule。</p>
-    <p>同一套文件还可能出现：可空列额外的 <code>.null.bin</code>；<code>projections/</code>；mutation 临时目录；<code>detached/</code>。较新版本可能把多份跳数索引收成 <code>skp_idx.packed</code>。ReplicatedMergeTree 副本协调在 ZooKeeper，磁盘上仍然是这些 part 文件夹。</p>
-
-    <p>上面是<strong>这一句查询怎么走</strong>，以及它在磁盘上对应哪些文件。下面按口诀拆零件：先少读、再顺读。不是把五步再讲一遍。</p>
-
-    <h2 id="store">存储层：少读 + 顺读</h2>
-    <p>这一层两件事：少碰磁盘，以及碰到的字节要连续。六张不是每张都「既少读又顺读」——先四张少读，再两张顺读。</p>
-
-    <h3>少读：少打开列，少打开叠</h3>
-
-    <div class="grid2">
-      <figure>
-        <h3><span class="tag tag-less">少读</span>列存：查 4 列不碰另外 76 列</h3>
-        <svg viewBox="0 0 480 160" role="img" aria-label="80 个列文件只打开 4 个">
-          <rect x="8" y="20" width="36" height="88" fill="#dbeafe" stroke="#1d4ed8"/><text x="14" y="128" font-size="11">date</text>
-          <rect x="50" y="20" width="36" height="88" fill="#dbeafe" stroke="#1d4ed8"/><text x="56" y="128" font-size="11">slot</text>
-          <rect x="92" y="20" width="36" height="88" fill="#dbeafe" stroke="#1d4ed8"/><text x="94" y="128" font-size="10">camp</text>
-          <rect x="134" y="20" width="36" height="88" fill="#dbeafe" stroke="#1d4ed8"/><text x="140" y="128" font-size="11">fee</text>
-          <rect x="176" y="20" width="22" height="88" fill="#e7e5e4"/>
-          <rect x="202" y="20" width="22" height="88" fill="#e7e5e4"/>
-          <rect x="218" y="20" width="22" height="88" fill="#e7e5e4"/>
-          <rect x="244" y="20" width="22" height="88" fill="#e7e5e4"/>
-          <rect x="270" y="20" width="22" height="88" fill="#e7e5e4"/>
-          <rect x="296" y="20" width="22" height="88" fill="#e7e5e4"/>
-          <text x="328" y="70" font-size="12">…共 80 个文件</text>
-          <text x="8" y="152" font-size="12" fill="#57534e">打开 date / slot / campaign / fee。少读从打开文件数就开始。</text>
-        </svg>
-      </figure>
-      <figure>
-        <h3><span class="tag tag-less">少读</span>压缩：同列重复度高，读盘字节少</h3>
-        <svg viewBox="0 0 480 160" role="img" aria-label="未压缩粗柱和压缩扁柱对比">
-          <rect x="40" y="24" width="48" height="100" fill="#ffedd5" stroke="#9a3412"/>
-          <rect x="100" y="64" width="48" height="60" fill="#dbeafe" stroke="#1d4ed8"/>
-          <text x="46" y="140" font-size="11">盘上原样</text>
-          <text x="108" y="140" font-size="11">压缩后</text>
-          <text x="180" y="60" font-size="12">os 几乎都是 android</text>
-          <text x="180" y="82" font-size="12">解压通常比多读磁盘便宜</text>
-          <text x="180" y="104" font-size="12">列存决定打开谁；压缩决定有多薄</text>
-        </svg>
-      </figure>
-    </div>
-
-    <div class="grid2">
-      <figure>
-        <h3><span class="tag tag-less">少读</span>稀疏主键：章节目录，不是每个字的页码</h3>
-        <svg viewBox="0 0 480 180" role="img" aria-label="稀疏索引默认约每 8192 行一个标记，对比精确定位到行">
-          <text x="8" y="22" font-size="12">MySQL 主键 B+Tree（示意）</text>
-          <text x="8" y="48" font-size="18" fill="#9a3412">● ● ● ● ● ● ● ● ● ●</text>
-          <text x="8" y="70" font-size="12">几乎每行一个叶子 → 精确到行，索引本身重</text>
-          <text x="8" y="102" font-size="12">ClickHouse 稀疏主键</text>
-          <text x="8" y="128" font-size="18" fill="#166534">■　　　　■　　　　■　　　　■</text>
-          <text x="8" y="148" font-size="12">默认约每 8192 行一个标记（自适应还看字节上限）</text>
-          <text x="8" y="170" font-size="12" fill="#57534e">primary.idx 按需读。列 .bin 只在命中叠上才解压。</text>
-        </svg>
-      </figure>
-      <figure>
-        <h3><span class="tag tag-less">少读</span>跳数索引：列上再贴便利贴，少扫 granule</h3>
-        <svg viewBox="0 0 480 210" role="img" aria-label="跳数索引用便利贴过滤 granule 块">
-          <rect x="8" y="16" width="84" height="52" fill="#dcfce7" stroke="#166534"/><text x="22" y="46" font-size="11">滤掉 G1</text>
-          <rect x="100" y="16" width="84" height="52" fill="#dcfce7" stroke="#166534"/><text x="114" y="46" font-size="11">滤掉 G2</text>
-          <rect x="192" y="16" width="84" height="52" fill="#ffedd5" stroke="#9a3412"/><text x="206" y="46" font-size="11">留下 G3</text>
-          <rect x="284" y="16" width="84" height="52" fill="#ffedd5" stroke="#9a3412"/><text x="298" y="46" font-size="11">留下 G4</text>
-          <rect x="376" y="16" width="84" height="52" fill="#dcfce7" stroke="#166534"/><text x="390" y="46" font-size="11">滤掉 G5</text>
-          <text x="8" y="92" font-size="12">这是 INDEX 便利贴干的事。常用 TYPE 见下方分家。</text>
-          <text x="8" y="114" font-size="12">minmax：这叠 [min,max] 有没有 99？没有 → 整块扔。</text>
-          <text x="8" y="136" font-size="12">bloom：555 一定不在这叠？一定不在 → 同样整块扔。</text>
-          <text x="8" y="158" font-size="12" fill="#57534e">skp_idx 按需读。GRANULARITY N 覆盖 N 个 marks；N=1 才约一叠。</text>
-          <text x="8" y="180" font-size="12" fill="#57534e">扔叠后才决定打不打开 .bin。收益看数据相关性和谓词。</text>
-        </svg>
-        <p><a href="clickhouse-compress-skip.html">压缩与跳数细图 →</a></p>
-      </figure>
-    </div>
-
-    <p>左边是目录，右边是便利贴。二者都按块少扫，但<strong>不是同一种索引</strong>；右边里的 minmax/布隆也<strong>不等于</strong>跳数索引本身。跳数索引的一张贴覆盖几个 marks，看 <code>GRANULARITY N</code>。</p>
-    <figure>
-      <svg viewBox="0 0 1000 280" role="img" aria-label="稀疏主键、跳数索引、TYPE 三层分家">
-        <text x="20" y="24" font-size="14" font-weight="600">三层分家：别把口里的「跳数/布隆」当成一件东西</text>
-
-        <rect x="20" y="40" width="960" height="56" fill="#dbeafe" stroke="#1d4ed8"/>
-        <text x="36" y="64" font-size="13" font-weight="600">稀疏主键 = ORDER BY 自带的章节目录</text>
-        <text x="36" y="84" font-size="12">不是 INDEX。管 date、slot_id。查询不带这些列，目录歇了。</text>
-
-        <text x="490" y="114" font-size="16" fill="#57534e">↓ 不是一回事</text>
-
-        <rect x="20" y="128" width="960" height="56" fill="#dcfce7" stroke="#166534"/>
-        <text x="36" y="152" font-size="13" font-weight="600">跳数索引 = INDEX … TYPE … 的总称（data skipping index）</text>
-        <text x="36" y="172" font-size="12">列上再贴便利贴。不带主键时便利贴照样问；没有 INDEX 就按列扫每一叠。</text>
-
-        <text x="490" y="202" font-size="16" fill="#57534e">↓ TYPE 才是贴法，不是总称</text>
-
-        <rect x="20" y="216" width="228" height="48" fill="#ffedd5" stroke="#9a3412"/>
-        <text x="48" y="246" font-size="13">TYPE minmax</text>
-        <rect x="260" y="216" width="228" height="48" fill="#ffedd5" stroke="#9a3412"/>
-        <text x="278" y="246" font-size="13">TYPE bloom_filter</text>
-        <rect x="500" y="216" width="228" height="48" fill="#fff" stroke="#d6d3d1"/>
-        <text x="548" y="246" font-size="13">TYPE set</text>
-        <rect x="740" y="216" width="240" height="48" fill="#fff" stroke="#d6d3d1"/>
-        <text x="752" y="236" font-size="12">tokenbf_v1</text>
-        <text x="752" y="254" font-size="12">ngrambf_v1</text>
-      </svg>
-      <figcaption>跳数索引 ≠ minmax/布隆。常用 TYPE：minmax、bloom_filter、set、tokenbf_v1、ngrambf_v1（不同 ClickHouse 版本支持范围不同）。稀疏主键连 INDEX 都不是。</figcaption>
-    </figure>
-
-    <p class="warn"><strong>别记错 · 跳数索引 ≠ minmax/布隆。</strong> 跳数索引是总称；minmax/布隆是其中两种贴法。稀疏主键也在跳 granule，但它是目录，不是跳数索引。主键裁剪以 granule 为单位；跳数索引由 <code>INDEX … GRANULARITY N</code> 决定一张贴覆盖几个 marks，N=1 才近似一叠。收益高度依赖数据相关性和查询谓词。</p>
-
-    <h3>顺读：碰到的字节要连续</h3>
-    <p>少读决定打开哪几叠；顺读决定这几叠在盘上是一段还是东一块西一块。</p>
-    <div class="grid2">
-      <figure>
-        <h3><span class="tag tag-seq">顺读</span>MergeTree：记流水账，晚上合订</h3>
-        <svg viewBox="0 0 480 170" role="img" aria-label="INSERT 追加小 part，后台 merge 成大文件">
-          <text x="8" y="22" font-size="12">INSERT 只追加不可变 part</text>
-          <rect x="8" y="36" width="70" height="40" fill="#fff" stroke="#44403c"/><text x="22" y="60" font-size="11">p1</text>
-          <rect x="86" y="36" width="70" height="40" fill="#fff" stroke="#44403c"/><text x="100" y="60" font-size="11">p2</text>
-          <rect x="164" y="36" width="70" height="40" fill="#fff" stroke="#44403c"/><text x="178" y="60" font-size="11">p3</text>
-          <text x="250" y="60" font-size="18" fill="#57534e">→</text>
-          <rect x="280" y="32" width="180" height="48" fill="#dcfce7" stroke="#166534"/>
-          <text x="312" y="60" font-size="12">merged 大文件</text>
-          <text x="8" y="104" font-size="12">不原地改。查询读已经写完的 part，插入另起新文件。</text>
-          <text x="8" y="126" font-size="12">后台 merge：小文件装订成大文件，顺序扫更顺。</text>
-          <text x="8" y="148" font-size="12" fill="#57534e">传统 ALTER UPDATE 常重写受影响 part，不是整张表。</text>
-        </svg>
-      </figure>
-      <figure>
-        <h3><span class="tag tag-seq">顺读</span>ORDER BY：过滤变成读一段连续字节</h3>
-        <svg viewBox="0 0 480 170" role="img" aria-label="未排序散点与按主键排好后的连续段">
-          <text x="8" y="22" font-size="12">未按 slot 排：命中东一块西一块</text>
-          <circle cx="30" cy="48" r="6" fill="#ffedd5" stroke="#9a3412"/>
-          <circle cx="80" cy="60" r="6" fill="#e7e5e4"/>
-          <circle cx="120" cy="44" r="6" fill="#ffedd5" stroke="#9a3412"/>
-          <circle cx="170" cy="56" r="6" fill="#e7e5e4"/>
-          <circle cx="220" cy="46" r="6" fill="#ffedd5" stroke="#9a3412"/>
-          <circle cx="270" cy="62" r="6" fill="#e7e5e4"/>
-          <circle cx="330" cy="50" r="6" fill="#ffedd5" stroke="#9a3412"/>
-          <text x="8" y="92" font-size="12">ORDER BY (date, slot) 之后：同一广告位挤在一起</text>
-          <rect x="8" y="108" width="280" height="28" fill="#ffedd5" stroke="#9a3412"/>
-          <text x="20" y="126" font-size="12">slot=1001 连续一段 · 顺读</text>
-          <rect x="296" y="108" width="160" height="28" fill="#e7e5e4"/>
-          <text x="318" y="126" font-size="12">别的 slot</text>
-          <text x="8" y="158" font-size="12" fill="#57534e">part 内排好，过滤 ≈ 扫一段，不是跳着找。</text>
-        </svg>
-      </figure>
-    </div>
-    <p class="warn"><strong>别记错 · 不是「彻底没有随机 I/O」。定位 granule 仍有 seek；快是因为命中后是大块顺序扫。</strong></p>
-
-    <h2 id="query">查询层：批算（附查询侧少读）</h2>
-    <p>列块进内存之后，主业是批算。谓词下推是查询侧的少读，不算 SIMD；物化是预先批算好，看板改读小表。</p>
-
-    <div class="grid2">
-      <figure>
-        <h3><span class="tag tag-batch">批算</span>向量化 + SIMD：一次处理一列一块</h3>
-        <svg viewBox="0 0 480 150" role="img" aria-label="逐行八拍对比 SIMD 一拍">
-          <text x="8" y="22" font-size="12">逐行：+ + + + + + + +　八拍</text>
-          <rect x="8" y="34" width="28" height="28" fill="#e7e5e4"/><text x="16" y="52" font-size="11">1</text>
-          <rect x="40" y="34" width="28" height="28" fill="#e7e5e4"/><text x="48" y="52" font-size="11">2</text>
-          <rect x="72" y="34" width="28" height="28" fill="#e7e5e4"/><text x="80" y="52" font-size="11">3</text>
-          <rect x="104" y="34" width="28" height="28" fill="#e7e5e4"/><text x="112" y="52" font-size="11">4</text>
-          <rect x="136" y="34" width="28" height="28" fill="#e7e5e4"/><text x="144" y="52" font-size="11">5</text>
-          <rect x="168" y="34" width="28" height="28" fill="#e7e5e4"/><text x="176" y="52" font-size="11">6</text>
-          <rect x="200" y="34" width="28" height="28" fill="#e7e5e4"/><text x="208" y="52" font-size="11">7</text>
-          <rect x="232" y="34" width="28" height="28" fill="#e7e5e4"/><text x="240" y="52" font-size="11">8</text>
-          <text x="8" y="90" font-size="12">SIMD：一块一指令</text>
-          <rect x="8" y="102" width="252" height="28" fill="#ffedd5" stroke="#9a3412"/>
-          <text x="70" y="120" font-size="12">[1 2 3 4 5 6 7 8] 一拍加完</text>
-        </svg>
-      </figure>
-      <figure>
-        <h3><span class="tag tag-batch">批算</span>查询内并行 + 分片并行</h3>
-        <svg viewBox="0 0 480 150" role="img" aria-label="一个 SELECT 打满多核，各节点算本地分片">
-          <text x="8" y="22" font-size="12">一个 SELECT 打满多核</text>
-          <rect x="8" y="34" width="70" height="32" fill="#ffedd5" stroke="#9a3412"/><text x="22" y="54" font-size="11">核 1</text>
-          <rect x="86" y="34" width="70" height="32" fill="#ffedd5" stroke="#9a3412"/><text x="100" y="54" font-size="11">核 2</text>
-          <rect x="164" y="34" width="70" height="32" fill="#ffedd5" stroke="#9a3412"/><text x="178" y="54" font-size="11">核 3</text>
-          <rect x="242" y="34" width="70" height="32" fill="#ffedd5" stroke="#9a3412"/><text x="256" y="54" font-size="11">核 4</text>
-          <text x="8" y="90" font-size="12">各节点算本地分片，上面只汇总</text>
-          <rect x="8" y="102" width="120" height="32" fill="#f3e8ff" stroke="#6b21a8"/><text x="28" y="122" font-size="11">节点 A 分片</text>
-          <rect x="140" y="102" width="120" height="32" fill="#f3e8ff" stroke="#6b21a8"/><text x="160" y="122" font-size="11">节点 B 分片</text>
-          <text x="276" y="122" font-size="12">→ Σ</text>
-        </svg>
-        <p>这是批算。跨分片 JOIN 要把行拉来拉去，那是别挡，见框架层。</p>
-      </figure>
-    </div>
-
-    <div class="grid3">
-      <figure>
-        <h3><span class="tag tag-less">少读</span>谓词下推</h3>
-        <svg viewBox="0 0 300 130" role="img" aria-label="进门安检对比进大厅再赶人">
-          <rect x="10" y="16" width="120" height="88" fill="#dcfce7" stroke="#166534"/>
-          <text x="28" y="48" font-size="12">进门安检</text>
-          <text x="22" y="70" font-size="11">读列后立刻滤</text>
-          <text x="36" y="90" font-size="11">少进内存</text>
-          <rect x="150" y="16" width="140" height="88" fill="#ffe4e6" stroke="#9f1239"/>
-          <text x="168" y="48" font-size="12">进大厅再赶人</text>
-          <text x="164" y="70" font-size="11">先全读再 WHERE</text>
-          <text x="186" y="90" font-size="11">白搬</text>
-        </svg>
-        <p>查询侧少读：过滤尽量在读列后立刻做，别等进内存再赶人。</p>
-      </figure>
-      <figure>
-        <h3><span class="tag tag-batch">批算</span>物化视图</h3>
-        <svg viewBox="0 0 300 130" role="img" aria-label="流水大表对日结小表">
-          <rect x="10" y="20" width="110" height="70" fill="#e7e5e4"/>
-          <text x="28" y="50" font-size="12">流水大表</text>
-          <text x="24" y="70" font-size="11">每天几十亿行</text>
-          <text x="128" y="58" font-size="16">→</text>
-          <rect x="154" y="28" width="130" height="54" fill="#dbeafe" stroke="#1d4ed8"/>
-          <text x="176" y="52" font-size="12">日汇总小表</text>
-          <text x="184" y="72" font-size="11">看板直接读</text>
-        </svg>
-        <p>预先批算好。看板读小表，少读是副作用。</p>
-      </figure>
-      <figure>
-        <h3><span class="tag tag-batch">批算</span>算子融合</h3>
-        <svg viewBox="0 0 300 130" role="img" aria-label="三趟扫描合成一趟">
-          <text x="10" y="28" font-size="12">分开：滤一趟 · 算一趟 · 聚一趟</text>
-          <rect x="10" y="40" width="50" height="24" fill="#e7e5e4"/><text x="20" y="56" font-size="11">①</text>
-          <rect x="68" y="40" width="50" height="24" fill="#e7e5e4"/><text x="78" y="56" font-size="11">②</text>
-          <rect x="126" y="40" width="50" height="24" fill="#e7e5e4"/><text x="136" y="56" font-size="11">③</text>
-          <text x="10" y="88" font-size="12">融合：一趟扫描做完</text>
-          <rect x="10" y="98" width="166" height="24" fill="#ffedd5" stroke="#9a3412"/>
-          <text x="52" y="114" font-size="11">滤+算+聚</text>
-        </svg>
-        <p>连续算子合成一趟扫描。</p>
-      </figure>
-    </div>
-
-    <p class="warn"><strong>别记错 ·「零拷贝」不是 ClickHouse 的正式术语。</strong> 更准确是：尽量按列块处理，避免物化为行对象。不必记成 Linux sendfile。</p>
-
-    <h2 id="frame">框架层：别挡</h2>
-    <p>分析优先。INSERT 与 SELECT 不按行互锁，所以不太互堵；后台 merge、mutation、磁盘/CPU/内存竞争仍会造成资源争用。复杂事务、外键、频繁改一行，都不是它要优化的路径。</p>
-
-    <div class="grid2">
-      <figure>
-        <h3><span class="tag tag-free">别挡</span>不为行级事务买单</h3>
-        <svg viewBox="0 0 480 170" role="img" aria-label="OLTP 行锁互堵对比 ClickHouse 追加不挡读">
-          <text x="8" y="22" font-size="12">典型 OLTP</text>
-          <rect x="8" y="36" width="200" height="48" fill="#ffe4e6" stroke="#9f1239"/>
-          <text x="20" y="56" font-size="12">UPDATE 锁这一行</text>
-          <text x="20" y="74" font-size="11">SELECT 在门口等</text>
-          <text x="8" y="106" font-size="12">ClickHouse</text>
-          <rect x="8" y="118" width="200" height="40" fill="#dcfce7" stroke="#166534"/>
-          <text x="20" y="142" font-size="12">INSERT 追加新 part</text>
-          <rect x="220" y="118" width="240" height="40" fill="#dbeafe" stroke="#1d4ed8"/>
-          <text x="232" y="142" font-size="12">SELECT 读已经写完的 part</text>
-        </svg>
-      </figure>
-      <figure>
-        <h3><span class="tag tag-free">别记错</span>主形态：单进程 + 线程池</h3>
-        <svg viewBox="0 0 480 170" role="img" aria-label="PostgreSQL 每连接一进程对比 ClickHouse 单进程线程池">
-          <text x="8" y="22" font-size="12">PostgreSQL 示意：一个连接一个进程</text>
-          <rect x="8" y="36" width="80" height="36" fill="#e7e5e4"/><text x="18" y="58" font-size="11">proc1</text>
-          <rect x="96" y="36" width="80" height="36" fill="#e7e5e4"/><text x="106" y="58" font-size="11">proc2</text>
-          <rect x="184" y="36" width="80" height="36" fill="#e7e5e4"/><text x="194" y="58" font-size="11">proc3</text>
-          <text x="8" y="98" font-size="12">ClickHouse：一个 clickhouse-server</text>
-          <rect x="8" y="112" width="300" height="44" fill="#f3e8ff" stroke="#6b21a8"/>
-          <text x="20" y="138" font-size="12">进程内线程池  t1 t2 t3 t4 …</text>
-        </svg>
-      </figure>
-    </div>
-
-    <div class="grid3">
-      <div class="card">
-        <h3><span class="tag tag-free">别挡</span>C++ 自管内存</h3>
-        <p>无 JVM GC 停顿。扫表热点路径少锁。后台 merge、mutation 仍会和查询抢 CPU/磁盘/内存。</p>
-      </div>
-      <div class="card">
-        <h3><span class="tag tag-free">别挡</span>分片加算力、副本保活</h3>
-        <p>数据本地算。跨分片 JOIN 要把行拉来拉去，弱，所以爱宽表。</p>
-      </div>
-      <div class="card">
-        <h3><span class="tag tag-free">别挡</span>更新很贵</h3>
-        <p>传统 <code>ALTER … UPDATE</code> mutation 通常重写受影响的 data parts，并非必然重写整张表。轻量更新/删除后来都有，但不是行级 OLTP。</p>
-      </div>
-    </div>
-
-    <p class="warn"><strong>别记错 · 不是「多进程模型」。主形态是单进程 clickhouse-server + 线程池，不是 PostgreSQL 那种一个连接一个进程。</strong></p>
-    <p class="warn"><strong>别记错 · 插入原子、轻量删除/更新后来都有，但不是行级 OLTP。</strong> 传统 mutation 贵在重写受影响 part；记成「分析优先、更新很贵」。</p>
-
-    <h2 id="kou">口诀对照</h2>
-    <table>
-      <thead>
-        <tr><th>口诀</th><th>层</th><th>条目</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>少读</td><td>存储为主</td><td>列存、压缩、稀疏主键、跳数索引；查询侧还有谓词下推</td></tr>
-        <tr><td>顺读</td><td>存储</td><td>追加 part、后台 merge、ORDER BY</td></tr>
-        <tr><td>批算</td><td>查询</td><td>向量化、并行、算子融合、物化（偷懒；读小表是少读副作用）</td></tr>
-        <tr><td>别挡</td><td>框架</td><td>不为 OLTP 买单；INSERT 与 SELECT 不按行互锁；后台 merge/mutation 仍会抢资源；数据本地算；跨分片 JOIN 弱所以爱宽表</td></tr>
-      </tbody>
-    </table>
-
-    <h2 id="quiz">自测</h2>
-    <p>能用自己的话答完这五句，原文条目就可以不背。点开对一下。</p>
+</section>
+<section>
+    <h2 id="quiz">10. 自测</h2>
     <details>
-      <summary>1. 80 列只查 4 列为什么快一个数量级？</summary>
-      <p>列存：每列一个文件，本句打开 date / slot / campaign / fee，不碰另外 76 列。同列再压缩，读盘字节更少。行式「即使只要 fee 也得搬整行」是教学概括；带覆盖索引的行存可能不必回表读完整行。</p>
+      <summary>1. 四口诀各管路径上哪一段？</summary>
+      <p>少读：先扔掉整天和整叠，再只打开用到的列。顺读：留下的字节在盘上连成一段。批算：进内存之后按块算，并可分给多个核、多台机器。别挡：不为改一行、按行加锁付钱。</p>
     </details>
     <details>
-      <summary>2. INSERT 为什么不原地改文件？merge 干什么？</summary>
-      <p>MergeTree 记流水账：INSERT 只追加不可变 part，查询读已经写完的文件。INSERT 与 SELECT 不按行互锁，但仍会和后台 merge、mutation 抢磁盘/CPU/内存。后台 merge 把小文件装订成大文件，减少文件数，让顺序扫更顺。传统 ALTER UPDATE mutation 通常重写受影响 part，不是必然整张表。</p>
+      <summary>2. 稀疏主键和跳数索引差在哪？</summary>
+      <p>主键是按 <code>(date, slot_id)</code> 排好序之后自带的目录，把昨天且广告位 1001 收成一段叠。跳数索引是另外贴上的便利贴，用来证明某一叠里不可能出现计划 99。两样都能让整叠不读，问的问题不同。</p>
     </details>
     <details>
-      <summary>3. 稀疏索引和 MySQL 主键 B+Tree 差在哪？</summary>
-      <p>稀疏主键是章节目录，默认约每 8192 行一个标记（启用自适应粒度时还受 index_granularity_bytes 影响），文件是 primary.idx。查询会按需读取/利用这份目录和 WHERE 对得上的跳数索引，可能走缓存，不保证一次性整份载入。跳数索引由 INDEX GRANULARITY N 决定一张贴覆盖几个 marks，N=1 才近似一叠。二者都不是 80 列、也不是整表。定位到还要读的块之后，只解压那些叠上需要的列。MySQL B+Tree 更像每个字的页码，精确定位到行，索引本身更重。</p>
+      <summary>3. 批算两张图各说什么？</summary>
+      <p>左：一颗核一次加一整段 fee。右：多个核或多台机器各算一部分的和，再加成同一个总数。扔掉 granule 归少读；跨分片 JOIN 归别挡。</p>
     </details>
     <details>
-      <summary>4. 若改成逐行执行，瓶颈会从磁盘换成什么？</summary>
-      <p>换成 CPU。一行一指令，没有 SIMD 批算；再把列块拆成行对象，解释和分支开销会把 CPU 打满。「零拷贝」不是正式术语，记成尽量按列块处理、避免物化为行对象，不是 Linux sendfile。</p>
+      <summary>4. 第二页和本页什么关系？</summary>
+      <p>那一页把本页「少读」里的两件事画开：打开的列为什么更薄，以及怎样证明一整叠可以不读。它仍是少读，不另成第五层。</p>
     </details>
-    <details>
-      <summary>5. 为什么爱宽表、不太爱复杂 JOIN？</summary>
-      <p>分片加算力、数据本地算。跨分片 JOIN 要把行在节点间拉来拉去，挡。宽表把常用维度预先铺在同一行，查询少跨节点关联。</p>
-    </details>
-  </main>
+  </section>
+</main>
 </body>
 </html>
