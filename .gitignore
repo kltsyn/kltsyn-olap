@@ -1,0 +1,8 @@
+*
+!.gitignore
+!.nojekyll
+!index.html
+!*/
+!olap/*.html
+!clickhouse-perf-memory.html
+!clickhouse-compress-skip.html

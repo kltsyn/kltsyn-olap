@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ClickHouse OLAP 怎么记</title>
+  <title>索引</title>
   <style>
     :root {
       --bg: #f6f5f1;
@@ -24,7 +24,7 @@
       display: grid;
       grid-template-columns: 240px minmax(0, 1fr);
     }
-    main { max-width: 720px; margin: 0; padding: 36px 32px 72px; }
+    main { max-width: 68rem; margin: 0; padding: 36px 48px 80px; }
     .outline {
       position: sticky;
       top: 0;
@@ -32,88 +32,34 @@
       overflow: auto;
       background: #f3f1ec;
       border-inline-end: 1px solid var(--line);
-      border-radius: 0;
       padding-block: 18px 28px;
       padding-inline: 14px 12px;
       margin: 0;
     }
-    .outline > p { margin: 8px 0; color: var(--ink); font-weight: 600; font-size: 14px; }
-    .outline ol { margin: 0 0 8px; padding-left: 0; list-style: none; }
-    .outline ol ol { padding-inline-start: 1rem; }
+    .outline > p { margin: 0 0 8px; color: var(--ink); font-weight: 600; font-size: 14px; }
+    .outline ol { margin: 0; padding-left: 0; list-style: none; }
     .outline li { margin: 4px 0; font-size: 14px; line-height: 1.5; }
-    .outline a { text-decoration: none; }
+    .outline a { color: var(--ink); text-decoration: none; }
     .outline a:hover { text-decoration: underline; }
-    .outline .why { display: block; color: var(--muted); font-size: 14px; line-height: 1.4; margin-top: 1px; }
-    .outline ol ol a { color: var(--muted); }
     @media (max-width: 860px) {
       body { grid-template-columns: 1fr; }
       main { padding: 24px 16px 48px; }
       .outline { position: static; height: auto; border-inline-end: none; border-bottom: 1px solid var(--line); }
     }
     h1 { font-size: 22px; font-weight: 600; line-height: 1.3; margin: 0 0 0.5em; hyphens: none; }
-    p { color: var(--muted); margin: 0 0 0.75em; line-height: 1.45; }
-    code { font-family: ui-monospace, Consolas, monospace; font-size: 0.875em; }
-    main a { color: var(--ink); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+    p { margin: 0 0 0.75em; max-width: 68rem; }
   </style>
 </head>
 <body>
-  <nav class="outline" aria-label="讲解目录">
-      <p>整体怎么记</p>
-      <ol>
-        <li><a href="clickhouse-perf-memory.html#gang">1. 纲领</a></li>
-        <li><a href="clickhouse-perf-memory.html#sql">2. 贯穿例子</a></li>
-        <li><a href="clickhouse-perf-memory.html#path">3. 四层路径</a></li>
-        <li>
-          <a href="clickhouse-perf-memory.html#less">4. 少读</a>
-          <ol>
-            <li><a href="clickhouse-perf-memory.html#less-day">4.1 先扔整天</a></li>
-            <li><a href="clickhouse-perf-memory.html#less-granule">4.2 再扔整叠</a></li>
-            <li><a href="clickhouse-perf-memory.html#less-col">4.3 最后只开用到的列</a></li>
-          </ol>
-        </li>
-        <li>
-          <a href="clickhouse-perf-memory.html#seq">5. 顺读</a>
-          <ol>
-            <li><a href="clickhouse-perf-memory.html#seq-append">5.1 写入只往后追加</a></li>
-            <li><a href="clickhouse-perf-memory.html#seq-order">5.2 排序把要的行挤在一起</a></li>
-            <li><a href="clickhouse-perf-memory.html#seq-merge">5.3 后台把小文件订成大文件</a></li>
-          </ol>
-        </li>
-        <li>
-          <a href="clickhouse-perf-memory.html#batch">6. 批算</a>
-          <ol>
-            <li><a href="clickhouse-perf-memory.html#batch-core">6.1 单核怎么算</a></li>
-            <li><a href="clickhouse-perf-memory.html#batch-who">6.2 谁和谁一起算</a></li>
-          </ol>
-        </li>
-        <li>
-          <a href="clickhouse-perf-memory.html#free">7. 别挡</a>
-          <ol>
-            <li><a href="clickhouse-perf-memory.html#free-lock">7.1 读写不必按行互锁</a></li>
-            <li><a href="clickhouse-perf-memory.html#free-rewrite">7.2 改历史要重写整本</a></li>
-            <li><a href="clickhouse-perf-memory.html#free-local">7.3 计算留在数据旁边</a></li>
-          </ol>
-        </li>
-      </ol>
-      <p>少读放大</p>
-      <ol>
-        <li><a href="clickhouse-compress-skip.html#thin">1. 少掉字节</a></li>
-        <li>
-          <a href="clickhouse-compress-skip.html#skip">2. 少掉整叠</a>
-          <ol>
-            <li><a href="clickhouse-compress-skip.html#skip-order">2.1 排序目录先收成一段</a></li>
-            <li><a href="clickhouse-compress-skip.html#skip-minmax">2.2 用最小和最大来证明</a></li>
-            <li><a href="clickhouse-compress-skip.html#skip-bloom">2.3 改问「一定没有」</a></li>
-            <li><a href="clickhouse-compress-skip.html#skip-same">2.4 两种证明是同一件事</a></li>
-            <li><a href="clickhouse-compress-skip.html#skip-write">2.5 便利贴在写入时算好</a></li>
-            <li><a href="clickhouse-compress-skip.html#skip-choose">2.6 哪一种更容易放下整叠</a></li>
-          </ol>
-        </li>
-      </ol>
+  <nav class="outline" aria-label="索引">
+    <p>目录</p>
+    <ol>
+      <li><a href="olap/clickhouse-perf-memory.html">clickhouse</a></li>
+    </ol>
   </nav>
   <main>
-    <h1>ClickHouse OLAP 怎么记</h1>
-    <p>先看左边的分法，再进正文。每一层先读主张，再用同一句 <code>sum(fee)</code> 把机制读完。</p>
+    <h1>索引</h1>
+    <p>左边按主题列出。点 clickhouse 进入整体页。</p>
   </main>
 </body>
 </html>
